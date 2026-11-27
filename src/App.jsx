@@ -54,7 +54,7 @@ function PWAInstallBanner() {
         </div>
         <div className="flex-1">
           <p className="text-sm font-bold text-white">Install Duet</p>
-          <p className="mt-0.5 text-xs text-zinc-400">Add to your home screen for the best experience — instant launch, fullscreen, offline access.</p>
+          <p className="mt-0.5 text-xs text-zinc-400">Add to your home screen for the best experience — instant launch, fullscreen, home-screen icon.</p>
         </div>
         <button
           onClick={() => setDismissed(true)}
@@ -116,7 +116,7 @@ function DuetAppShell() {
   // Handle /room/:code invitation links
   useEffect(() => {
     if (isHandlingSpotifyCallback) return;
-    const match = /^\/room\/([A-Za-z0-9]{4,8})$/i.exec(window.location.pathname);
+    const match = /^\/room\/([A-Z2-9]{6})$/i.exec(window.location.pathname);
     if (match) {
       const code = match[1].toUpperCase();
       setRoomLoading(true);

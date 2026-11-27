@@ -63,7 +63,7 @@ export function createApp({ store: customStore } = {}) {
   app.get('/ready', (_req, res) => {
     res.json({
       ready: true,
-      storage: env.REDIS_URL ? 'redis-configured' : 'in-memory',
+      storage: 'in-memory',
       providers: {
         youtube: true,
         youtubeSearchApi: Boolean(env.YOUTUBE_API_KEY),
@@ -122,6 +122,9 @@ export function createApp({ store: customStore } = {}) {
     }
   });
 
+  // Pre-join room summary. This is intentionally public: the 6-character
+  // room code is the secret (about 1 billion combinations), and /api/ is
+  // rate-limited, so it cannot be used to enumerate live rooms at scale.
   app.get('/api/rooms/:code', (req, res) => {
     const code = String(req.params.code || '').trim().toUpperCase();
     const room = store.getRoom(code);

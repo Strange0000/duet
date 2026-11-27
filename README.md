@@ -56,4 +56,4 @@ npm run build
 
 ## Known Limitations
 - **Spotify** is disabled (`ENABLE_SPOTIFY=false`) pending Spotify developer policy authorization (see [PROVIDER_LIMITATIONS.md](PROVIDER_LIMITATIONS.md)).
-- **Free Hosting**: Render free-tier instances sleep after inactivity (cold starts) and in-memory room state resets on restart unless `REDIS_URL` is configured.
+- **Free Hosting**: Render free-tier instances sleep after inactivity (cold starts) and in-memory room state resets on restart (there is no Redis adapter yet).

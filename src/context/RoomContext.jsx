@@ -80,6 +80,7 @@ export function RoomProvider({ children }) {
   const roomStateRef = useRef(null);
   const sessionRef = useRef(null);
   const audioUnlockedRef = useRef(false);
+  const scheduledPlayTimerRef = useRef(null);
 
   roomStateRef.current = roomState;
   sessionRef.current = session;
@@ -120,6 +121,13 @@ export function RoomProvider({ children }) {
       const player = playerRef.current;
       if (!player || !playback || !track) return;
 
+      // Cancel any pending scheduled play so a stale timeout cannot
+      // seek + play on an old state after a newer one arrives.
+      if (scheduledPlayTimerRef.current) {
+        clearTimeout(scheduledPlayTimerRef.current);
+        scheduledPlayTimerRef.current = null;
+      }
+
       const trackKey = `${track.id}:${playback.trackVersion}`;
       const estimatedNow = clockSyncRef.current.estimateServerNowMs();
       const expectedMs = computeExpectedPositionMs(playback, estimatedNow);
@@ -142,7 +150,8 @@ export function RoomProvider({ children }) {
             : 0;
 
         if (delayMs > 20 && delayMs < 3000) {
-          setTimeout(async () => {
+          scheduledPlayTimerRef.current = setTimeout(async () => {
+            scheduledPlayTimerRef.current = null;
             await player.seek(playback.anchorPositionMs || 0);
             await player.play();
           }, delayMs);

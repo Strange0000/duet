@@ -14,19 +14,19 @@
 - **Phase 12 (Security & Privacy)**: Helmet, CORS, rate limiting, Zod validation, crypto session tokens, 64kb payload limit, **privacy & data-deletion notice** (modal in room settings + landing page footer).
 - **Phase 13 (PWA)**: `manifest.webmanifest`, `sw.js`, **PWA install prompt banner** (`beforeinstallprompt` handler with Install/Dismiss buttons, iOS home-screen awareness).
 - **Phase 14 (Performance)**: **Lazy loading** (`React.lazy` + `Suspense` for `LandingPage`, `RoomView`), **code splitting** (3 separate chunks in production build), **adaptive visualizer frame rate** (pauses when `document.hidden`, throttles to 30fps when `prefers-reduced-motion`, respects reduced-motion with static gradient), debounced search with `AbortController`, bounded reconnection.
-- **Phase 15 (Testing)**: 15/15 automated tests passing (5 test files), **`MANUAL_TEST_CHECKLIST.md`** created (12 categories, 50+ test cases).
+- **Phase 15 (Testing)**: 17/17 automated tests passing (5 test files), **`MANUAL_TEST_CHECKLIST.md`** created (12 categories, 50+ test cases).
 - **Phase 16 (Deployment & Docs)**: `render.yaml`, `.env.example`, `DEPLOYMENT.md`, `README.md`, `ARCHITECTURE.md`, `API_DOCUMENTATION.md`, `PROVIDER_LIMITATIONS.md`, `TEST_REPORT.md`.
 
 ## Test Results
 
-- **npm test**: 5 files, **15/15 passed** (3.99s)
-- **npm run build**: ✅ passed in 6.98s
+- **npm test**: 5 files, **17/17 passed**
+- **npm run build**: ✅ passed in 5.86s
   - `index.html`: 1.13 kB
-  - `index-*.css`: 68.18 kB
-  - `LandingPage-*.js`: 37.64 kB (lazy-loaded)
-  - `RoomView-*.js`: 40.85 kB (lazy-loaded)
-  - `AudioVisualizerCanvas-*.js`: 7.69 kB (lazy-loaded)
-  - `index-*.js`: 212.14 kB (core bundle)
+  - `index-*.css`: 81.80 kB
+  - `LandingPage-*.js`: 38.68 kB (lazy-loaded)
+  - `RoomView-*.js`: 51.83 kB (lazy-loaded)
+  - `SpotifyConnectModal-*.js`: 14.95 kB (lazy-loaded)
+  - `index-*.js`: 226.79 kB (core bundle)
 
 ## YouTube API Key
 
@@ -36,5 +36,5 @@
 
 - **Playwright browser tests** — Two-browser-context automated end-to-end tests (requires Playwright installation).
 - **Redis adapter** — `socket.io-redis` for production multi-instance scaling. Currently in-memory only.
-- **Spotify integration** — Blocked by Spotify developer policy. Remains "Coming Soon."
+- **Spotify integration** — Enabled (Premium, via OAuth PKCE + Web Playback SDK). The server gate is open (`ENABLE_SPOTIFY=true`); free accounts get a 30-second preview.
 - Physical iPhone Safari & Android Chrome multi-network testing (see `MANUAL_TEST_CHECKLIST.md`).
