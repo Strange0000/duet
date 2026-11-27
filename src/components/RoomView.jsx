@@ -1058,9 +1058,8 @@ export default function RoomView({ isDemo = false, onLeave }) {
                       className={
                         mySource === 'youtube'
                           ? 'overflow-hidden rounded-2xl border border-white/10 bg-black'
-                          : 'pointer-events-none absolute inset-0 -z-10 overflow-hidden opacity-0'
+                          : 'mx-auto w-full max-w-[360px] overflow-hidden rounded-2xl border border-white/10 bg-black'
                       }
-                      aria-hidden={mySource !== 'youtube'}
                     >
                       <div ref={ytContainerRef} className="aspect-video w-full" />
                     </div>

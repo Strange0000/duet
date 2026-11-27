@@ -47,7 +47,7 @@ describe('Duet Backend HTTP & Socket.IO Integration', () => {
     const providers = await request(app).get('/api/providers');
     expect(providers.status).toBe(200);
     expect(providers.body.youtube.available).toBe(true);
-    expect(typeof providers.body.spotify.available).toBe('boolean');
+    expect(providers.body.spotify.available).toBe(true);
   });
 
   it('runs full two-client room lifecycle, auth, playback sync, queue, and reconnect', async () => {
