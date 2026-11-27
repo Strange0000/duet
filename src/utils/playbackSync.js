@@ -114,6 +114,63 @@ export function resolvePlaybackStatus({
 }
 
 /**
+ * Whether the local player has actually started the current track, for the
+ * drift loop: a player still cueing/buffering must never be seek-corrected.
+ */
+export function playerHasStarted(playerState) {
+  return playerState === 'playing' || playerState === 'paused';
+}
+
+/**
+ * Stable identity of one playback command: the track, its version, the
+ * play/pause state and the anchor it plays from. Two room:state broadcasts
+ * that carry the same signature are the same command, not a new one.
+ */
+export function computePlaybackSignature(track, playback) {
+  if (!track || !playback) return null;
+  return [
+    track.id,
+    playback.trackVersion,
+    playback.playbackState,
+    playback.anchorPositionMs ?? 0,
+    playback.anchorServerTimeMs ?? 0,
+    playback.effectiveAtServerMs ?? '',
+  ].join(':');
+}
+
+/**
+ * Whether a playback state should be (re-)applied to the local player.
+ *
+ * The server re-broadcasts room:state ~every second (each player:status
+ * report triggers one), and every broadcast re-runs the effect that drives
+ * the player — so without this, play()/seek() were re-issued every second
+ * while the room played. That restarted the YouTube load each time, so a
+ * first Play sat on "Buffering" at 00:00 for ~40s, and it cleared the stall
+ * watchdog before it could ever fire. A re-broadcast of the SAME command
+ * therefore only re-applies when the player is actually in the wrong state
+ * (paused while the room plays, or playing while the room is paused);
+ * anything else — a new track, a new command, a changed anchor — always
+ * re-applies.
+ */
+export function shouldReapplyPlayback({
+  signature,
+  lastSignature,
+  trackKey,
+  lastTrackKey,
+  livePlayerState,
+  playbackState,
+}) {
+  if (!signature || signature !== lastSignature || trackKey !== lastTrackKey) return true;
+  if (playbackState === 'playing') {
+    // Already playing, or already trying to start — leave it alone. A
+    // paused/ready/idle player is the one case that needs a fresh play().
+    return !['playing', 'buffering', 'cued', 'unstarted'].includes(livePlayerState);
+  }
+  // Room is paused: only re-apply when the player is still going.
+  return !['paused', 'idle', 'ended'].includes(livePlayerState);
+}
+
+/**
  * Evaluates whether a drift correction seek should occur based on thresholds & cooldowns.
  * Thresholds:
  *  - < 150ms: no correction

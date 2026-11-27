@@ -14,7 +14,7 @@ import { YouTubePlayer } from '../players/YouTubePlayer';
 import { emitAck, generateCommandId, getSocket } from '../services/socketClient';
 import { backgroundAudio } from '../utils/backgroundAudio';
 import { ClockSync } from '../utils/clockSync';
-import { computeExpectedPositionMs, evaluateDriftCorrection, resolvePlaybackStatus, shouldReportRealDuration } from '../utils/playbackSync';
+import { computeExpectedPositionMs, computePlaybackSignature, evaluateDriftCorrection, playerHasStarted, resolvePlaybackStatus, shouldReapplyPlayback, shouldReportRealDuration } from '../utils/playbackSync';
 
 export const RoomContext = createContext(null);
 
@@ -148,6 +148,14 @@ export function RoomProvider({ children }) {
   // spinning on "Loading…" forever.
   const playWatchdogTimerRef = useRef(null);
   const playWatchdogAttemptRef = useRef(0);
+  // R1 (follow-up): signature of the last playback state actually applied
+  // to the player. The server re-broadcasts room:state ~every second (each
+  // player:status report triggers one) and the effect below re-runs on
+  // every broadcast — without this, applyPlaybackToPlayer re-issued
+  // play()/seek() every second, restarting the YouTube load each time so a
+  // first Play never finished buffering, and it cleared the stall watchdog
+  // before it could ever fire.
+  const lastAppliedPlaybackRef = useRef(null);
   const volumeRef = useRef(volume);
   const mutedRef = useRef(muted);
 
@@ -330,6 +338,43 @@ export function RoomProvider({ children }) {
       const player = playerRef.current;
       if (!player || !playback || !track) return;
 
+      const trackKey = `${track.id}:${playback.trackVersion}`;
+      const signature = computePlaybackSignature(track, playback);
+      // R1 (follow-up): the same playback command re-broadcast? room:state
+      // arrives ~every second and re-runs the effect that calls this, so
+      // without this check every broadcast re-issued play()/seek() — each
+      // one restarted the YouTube load, so a first Play never finished
+      // buffering, and each one cleared the stall watchdog before it could
+      // fire. Only re-apply when the player is actually in the wrong state.
+      // A scheduled play already queued is never disturbed either.
+      if (
+        loadedTrackKeyRef.current === trackKey &&
+        lastAppliedPlaybackRef.current === signature
+      ) {
+        if (scheduledPlayTimerRef.current) return;
+        let liveState = null;
+        try {
+          liveState = await player.getState();
+        } catch {
+          liveState = null;
+        }
+        if (
+          !shouldReapplyPlayback({
+            signature,
+            lastSignature: lastAppliedPlaybackRef.current,
+            trackKey,
+            lastTrackKey: loadedTrackKeyRef.current,
+            livePlayerState: liveState,
+            playbackState: playback.playbackState,
+          })
+        ) {
+          return;
+        }
+        // Else fall through: the player is paused while the room plays (or
+        // playing while the room is paused) and genuinely needs the command.
+      }
+      lastAppliedPlaybackRef.current = signature;
+
       // Cancel any pending scheduled play so a stale timeout cannot
       // seek + play on an old state after a newer one arrives.
       if (scheduledPlayTimerRef.current) {
@@ -387,7 +432,6 @@ export function RoomProvider({ children }) {
         playWatchdogTimerRef.current = setTimeout(check, 4000);
       };
 
-      const trackKey = `${track.id}:${playback.trackVersion}`;
       const estimatedNow = clockSyncRef.current.estimateServerNowMs();
       const expectedMs = computeExpectedPositionMs(playback, estimatedNow);
 
@@ -473,6 +517,8 @@ export function RoomProvider({ children }) {
         await playerRef.current.destroy();
         playerRef.current = null;
         loadedTrackKeyRef.current = null;
+        // R1 (follow-up): a new player instance has nothing applied yet.
+        lastAppliedPlaybackRef.current = null;
       }
 
       const callbacks = {
@@ -881,6 +927,10 @@ export function RoomProvider({ children }) {
       const prevPos = lastPlayerPositionRef.current;
       const positionAdvanced = actualMs - prevPos >= 500;
       lastPlayerPositionRef.current = actualMs;
+      // R1 (follow-up): the polled state, hoisted so the seek guard below
+      // can see it — a player that has not started this track yet must
+      // never be seek-corrected.
+      let effectivePlayerState = null;
       try {
         const polled = await player.getState();
         if (polled) {
@@ -892,6 +942,7 @@ export function RoomProvider({ children }) {
           ) {
             effective = 'playing';
           }
+          effectivePlayerState = effective;
           if (effective !== playerStateRef.current) {
             playerStateRef.current = effective;
             setPlayerState(effective);
@@ -976,15 +1027,31 @@ export function RoomProvider({ children }) {
       consecutiveDriftRef.current = evaluation.nextConsecutiveCount;
 
       if (evaluation.action === 'seek') {
-        lastCorrectionAtRef.current = Date.now();
-        await player.seek(evaluation.targetMs);
-        setSyncMetrics((prev) => ({
-          ...prev,
-          reportedPositionMs: Math.round(evaluation.targetMs),
-          expectedPositionMs: Math.round(expectedMs),
-          driftMs: evaluation.driftMs,
-          correctionCount: prev.correctionCount + 1,
-        }));
+        // R1 (follow-up): never seek a player that has not started this
+        // track yet. While the video is still cueing/buffering its position
+        // sits at 0 while the expected position grows, so the drift loop
+        // would seek it every ~1.5s — each seek disturbs the load and the
+        // video never starts. Report the position, but do not seek and do
+        // not count a correction. (A player whose position is advancing is
+        // 'playing' by the overrule above, so real drift still corrects.)
+        if (!playerHasStarted(effectivePlayerState)) {
+          setSyncMetrics((prev) => ({
+            ...prev,
+            reportedPositionMs: Math.round(actualMs),
+            expectedPositionMs: Math.round(expectedMs),
+            driftMs: evaluation.driftMs,
+          }));
+        } else {
+          lastCorrectionAtRef.current = Date.now();
+          await player.seek(evaluation.targetMs);
+          setSyncMetrics((prev) => ({
+            ...prev,
+            reportedPositionMs: Math.round(evaluation.targetMs),
+            expectedPositionMs: Math.round(expectedMs),
+            driftMs: evaluation.driftMs,
+            correctionCount: prev.correctionCount + 1,
+          }));
+        }
       } else {
         setSyncMetrics((prev) => ({
           ...prev,
@@ -1152,6 +1219,7 @@ export function RoomProvider({ children }) {
       await playerRef.current.destroy();
       playerRef.current = null;
       loadedTrackKeyRef.current = null;
+      lastAppliedPlaybackRef.current = null;
     }
     backgroundAudio.destroy();
     clearSession();

@@ -89,6 +89,13 @@ export class YouTubePlayer extends BasePlayer {
     // A video that was only cued (cueVideoById) often never starts when
     // playVideo() is called on it — it sits on "Buffering" at 00:00.
     this.hasPlayedVideoId = null;
+    // R1 (follow-up): the videoId a loadVideoById was issued for and which
+    // has not yet reached PLAYING. Re-issuing loadVideoById for the same
+    // video restarts its buffering from scratch — and the room state is
+    // re-broadcast ~every second, so play() was called again and again and
+    // a first Play never finished loading. A play() that arrives while the
+    // load is already in flight must NOT reload; it just calls playVideo().
+    this.loadIssuedForVideoId = null;
     this.volume = 0.85;
     this.muted = false;
   }
@@ -139,6 +146,7 @@ export class YouTubePlayer extends BasePlayer {
               this.pendingVideo = null;
               // B1: load AND play when the room is playing, otherwise cue paused.
               if (shouldPlay) {
+                this.loadIssuedForVideoId = videoId;
                 this.player.loadVideoById({ videoId, startSeconds: startSec });
               } else {
                 this.player.cueVideoById({ videoId, startSeconds: startSec });
@@ -159,6 +167,7 @@ export class YouTubePlayer extends BasePlayer {
             if (event.data === YTState.PLAYING) {
               this.state = 'playing';
               this.hasPlayedVideoId = this.currentVideoId;
+              this.loadIssuedForVideoId = null;
               this.callbacks.onStateChange?.('playing');
             } else if (event.data === YTState.PAUSED) {
               this.state = 'paused';
@@ -166,6 +175,16 @@ export class YouTubePlayer extends BasePlayer {
             } else if (event.data === YTState.BUFFERING) {
               this.state = 'buffering';
               this.callbacks.onStateChange?.('buffering');
+            } else if (event.data === YTState.CUED) {
+              // R1 (follow-up): a cued video is loaded but not started — the
+              // state the player sits in between cueVideoById and the first
+              // play(). Callers use it to tell "not started yet" from
+              // "started and buffering".
+              this.state = 'cued';
+              this.callbacks.onStateChange?.('cued');
+            } else if (event.data === YTState.UNSTARTED) {
+              this.state = 'unstarted';
+              this.callbacks.onStateChange?.('unstarted');
             } else if (event.data === YTState.ENDED) {
               this.state = 'ended';
               this.callbacks.onStateChange?.('ended');
@@ -176,6 +195,9 @@ export class YouTubePlayer extends BasePlayer {
             const code = event.data;
             const message = YT_ERROR_MESSAGES[code] || `YouTube player error (${code})`;
             const isEmbedBlocked = code === 101 || code === 150 || code === 100;
+            // R1 (follow-up): a failed load must not block a retry — clear
+            // the in-flight marker so the next play() can force-load again.
+            this.loadIssuedForVideoId = null;
             this.callbacks.onError?.({ code, message, isEmbedBlocked });
           },
         },
@@ -207,6 +229,7 @@ export class YouTubePlayer extends BasePlayer {
 
     this.currentVideoId = videoId;
     this.hasPlayedVideoId = null;
+    this.loadIssuedForVideoId = null;
     if (!this.isReady || !this.player) {
       this.pendingVideo = { videoId, startSec, shouldPlay };
       return;
@@ -216,6 +239,7 @@ export class YouTubePlayer extends BasePlayer {
     // lost while the video is still loading and the OLD video keeps playing.
     // loadVideoById loads AND plays, so use it when the room is playing.
     if (shouldPlay) {
+      this.loadIssuedForVideoId = videoId;
       this.player.loadVideoById({ videoId, startSeconds: startSec });
     } else {
       this.player.cueVideoById({ videoId, startSeconds: startSec });
@@ -239,7 +263,17 @@ export class YouTubePlayer extends BasePlayer {
     // for ~40s in both YouTube and Audio Only modes, while loadVideoById
     // (the path Next uses) started at once. Force a real load+play for a
     // video that has never actually played yet.
+    // R1 (follow-up): but ONLY when no load is already in flight for this
+    // video. play() is called again on every room:state re-broadcast
+    // (~every second), and re-issuing loadVideoById restarts the buffering
+    // from scratch each time — that was the actual stall. While the load
+    // is in flight, just call playVideo() (a no-op while buffering) and
+    // let the load finish.
     if (this.currentVideoId && this.hasPlayedVideoId !== this.currentVideoId) {
+      if (this.loadIssuedForVideoId === this.currentVideoId) {
+        this.player.playVideo();
+        return;
+      }
       let startSec = 0;
       try {
         startSec = Math.max(0, this.player.getCurrentTime?.() || 0);
@@ -247,6 +281,7 @@ export class YouTubePlayer extends BasePlayer {
         // Fall through with startSec 0; the drift loop seeks to the
         // expected position once playback starts.
       }
+      this.loadIssuedForVideoId = this.currentVideoId;
       this.player.loadVideoById({ videoId: this.currentVideoId, startSeconds: startSec });
       return;
     }
@@ -353,6 +388,7 @@ export class YouTubePlayer extends BasePlayer {
     this.isReady = false;
     this.currentVideoId = null;
     this.hasPlayedVideoId = null;
+    this.loadIssuedForVideoId = null;
     this.pendingVideo = null;
   }
 }

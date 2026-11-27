@@ -201,7 +201,7 @@ describe('YouTubePlayer (R1 first Play, R5 stale duration)', () => {
       destroy: vi.fn(),
     };
     window.YT = {
-      PlayerState: { ENDED: 0, PLAYING: 1, PAUSED: 2, BUFFERING: 3, CUED: 5 },
+      PlayerState: { UNSTARTED: -1, ENDED: 0, PLAYING: 1, PAUSED: 2, BUFFERING: 3, CUED: 5 },
       Player: vi.fn(function (el, config) {
         capturedEvents = config.events;
         return fakePlayer;
@@ -294,6 +294,72 @@ describe('YouTubePlayer (R1 first Play, R5 stale duration)', () => {
     expect(fakePlayer.seekTo).toHaveBeenCalledWith(5, true);
     // Never played yet, so the play must force-load rather than playVideo().
     expect(fakePlayer.loadVideoById).toHaveBeenCalled();
+    container.remove();
+  });
+
+  it('R1 follow-up: repeated play() while the load is in flight must NOT re-issue loadVideoById', async () => {
+    // This was the actual stall: room:state is re-broadcast ~every second,
+    // and every broadcast re-ran play() — each call restarted the YouTube
+    // load, so a first Play never finished buffering. A second play() while
+    // the first load is still in flight must just call playVideo().
+    const onStateChange = vi.fn();
+    const player = new YouTubePlayer({ onStateChange });
+    const container = makeContainer();
+    await initPlayer(player, container);
+
+    await player.loadTrack(MIDNIGHT_CITY, 0, false);
+    await player.play();
+    expect(fakePlayer.loadVideoById).toHaveBeenCalledTimes(1);
+    expect(fakePlayer.playVideo).not.toHaveBeenCalled();
+
+    // The room re-broadcasts the same playing state ~every second; each
+    // re-apply calls play() again. The load must not restart.
+    capturedEvents.onStateChange({ data: 3 }); // BUFFERING
+    await player.play();
+    await player.play();
+    expect(fakePlayer.loadVideoById).toHaveBeenCalledTimes(1);
+    expect(fakePlayer.playVideo).toHaveBeenCalled();
+
+    // Once PLAYING fires, later play() calls are plain playVideo() too.
+    fakePlayer.loadVideoById.mockClear();
+    fakePlayer.playVideo.mockClear();
+    capturedEvents.onStateChange({ data: 1 }); // PLAYING
+    await player.play();
+    expect(fakePlayer.loadVideoById).not.toHaveBeenCalled();
+    expect(fakePlayer.playVideo).toHaveBeenCalledTimes(1);
+    container.remove();
+  });
+
+  it('R1 follow-up: after a load error, play() may force-load again', async () => {
+    const player = new YouTubePlayer({ onError: vi.fn() });
+    const container = makeContainer();
+    await initPlayer(player, container);
+
+    await player.loadTrack(MIDNIGHT_CITY, 0, false);
+    await player.play();
+    expect(fakePlayer.loadVideoById).toHaveBeenCalledTimes(1);
+
+    // The load failed — the in-flight marker must clear so a retry works.
+    capturedEvents.onError({ data: 5 });
+    fakePlayer.loadVideoById.mockClear();
+    await player.play();
+    expect(fakePlayer.loadVideoById).toHaveBeenCalledTimes(1);
+    container.remove();
+  });
+
+  it('R1 follow-up: CUED and UNSTARTED states are reported, not swallowed', async () => {
+    const onStateChange = vi.fn();
+    const player = new YouTubePlayer({ onStateChange });
+    const container = makeContainer();
+    await initPlayer(player, container);
+
+    capturedEvents.onStateChange({ data: 5 }); // CUED
+    expect(await player.getState()).toBe('cued');
+    expect(onStateChange).toHaveBeenCalledWith('cued');
+
+    capturedEvents.onStateChange({ data: -1 }); // UNSTARTED
+    expect(await player.getState()).toBe('unstarted');
+    expect(onStateChange).toHaveBeenCalledWith('unstarted');
     container.remove();
   });
 

@@ -4,7 +4,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import { Server as SocketIOServer } from 'socket.io';
-import { env } from './config/env.js';
+import { env, isAllowedOrigin } from './config/env.js';
 import { RoomStore } from './stores/roomStore.js';
 import { registerSocketHandlers } from './sockets/registerSocketHandlers.js';
 import { unifiedSearch, lookupYouTubeVideo, resolveYouTubeTrack } from './services/searchService.js';
@@ -29,8 +29,12 @@ export function createApp({ store: customStore } = {}) {
 
   app.use(
     cors({
+      // R2 (follow-up): the same origin check as the socket — the configured
+      // origins plus this app's own Netlify deploy previews. Without the
+      // preview allowance, a deploy-preview frontend could not call the
+      // backend REST API at all (the browser blocked /api/youtube/resolve).
       origin(origin, cb) {
-        if (!origin || env.ALLOWED_ORIGINS.includes(origin) || env.ALLOWED_ORIGINS.includes('*')) {
+        if (isAllowedOrigin(origin)) {
           return cb(null, true);
         }
         return cb(new Error('Origin not allowed by CORS'));
@@ -163,7 +167,14 @@ export function createApp({ store: customStore } = {}) {
 
   const io = new SocketIOServer(server, {
     cors: {
-      origin: env.ALLOWED_ORIGINS.includes('*') ? '*' : env.ALLOWED_ORIGINS,
+      // R2 (follow-up): same check as the REST API — a preview frontend must
+      // be able to open its socket too, not just call /api/*.
+      origin: (origin, cb) => {
+        if (isAllowedOrigin(origin)) {
+          return cb(null, true);
+        }
+        return cb(new Error('Origin not allowed by CORS'));
+      },
       methods: ['GET', 'POST'],
       credentials: true,
     },
