@@ -9,6 +9,7 @@ import React, {
 } from 'react';
 import { INITIAL_TRACKS } from '../data/mockTracks';
 import { LocalAudioPlayer } from '../players/LocalAudioPlayer';
+import { SpotifyPlayer } from '../players/SpotifyPlayer';
 import { YouTubePlayer } from '../players/YouTubePlayer';
 import { emitAck, generateCommandId, getSocket } from '../services/socketClient';
 import { backgroundAudio } from '../utils/backgroundAudio';
@@ -184,15 +185,6 @@ export function RoomProvider({ children }) {
         loadedTrackKeyRef.current = null;
       }
 
-      if (source === 'spotify') {
-        setPlayerError({
-          code: 'PROVIDER_UNAVAILABLE',
-          message:
-            'Spotify playback is unavailable pending developer policy authorization. Switch to YouTube or Audio Only.',
-        });
-        return;
-      }
-
       const callbacks = {
         onReady: () => {
           if (sessionRef.current) {
@@ -231,7 +223,11 @@ export function RoomProvider({ children }) {
         },
       };
 
-      const adapter = wantsYouTube ? new YouTubePlayer(callbacks) : new LocalAudioPlayer(callbacks);
+      const adapter = wantsYouTube
+        ? new YouTubePlayer(callbacks)
+        : source === 'spotify'
+          ? new SpotifyPlayer(callbacks)
+          : new LocalAudioPlayer(callbacks);
 
       if (wantsYouTube && !containerEl) return;
 
@@ -474,7 +470,7 @@ export function RoomProvider({ children }) {
 
     const res = await emitAck('room:create', {
       name,
-      source: source === 'spotify' ? 'youtube' : source,
+      source,
       initialTracks: INITIAL_TRACKS.slice(0, 3),
     });
     if (!res?.ok) {
@@ -505,7 +501,7 @@ export function RoomProvider({ children }) {
     const res = await emitAck('room:join', {
       roomCode: roomCode.trim().toUpperCase(),
       name,
-      source: source === 'spotify' ? 'youtube' : source,
+      source,
     });
     if (!res?.ok) {
       setRoomError(res?.error || 'Failed to join room');

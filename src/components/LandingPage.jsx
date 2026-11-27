@@ -18,7 +18,9 @@ import {
 } from 'lucide-react';
 import { INITIAL_TRACKS, formatTime } from '../data/mockTracks';
 import { fetchSongArtwork } from '../utils/artworkApi';
+import { getStoredSpotifyAuth } from '../utils/spotifyAuth';
 import AudioVisualizerCanvas from './AudioVisualizerCanvas';
+import SpotifyConnectModal from './SpotifyConnectModal';
 
 /* ——— Animated equalizer bars ——— */
 function EqBars({ active = true, colorClass = 'bg-white' }) {
@@ -120,7 +122,9 @@ export default function LandingPage({
   const [joinErr, setJoinErr] = useState('');
   const [openFaq, setOpenFaq] = useState(0);
   const [connectOpen, setConnectOpen] = useState(false);
-  const [connectedSource, setConnectedSource] = useState('youtube'); // 'youtube' | 'local'
+  const [spotifyModalOpen, setSpotifyModalOpen] = useState(false);
+  const [connectedSource, setConnectedSource] = useState('youtube'); // 'youtube' | 'audio' | 'spotify'
+  const [spotifyAuth, setSpotifyAuth] = useState(() => getStoredSpotifyAuth());
   const [trendingSongs, setTrendingSongs] = useState(TRENDING_SONGS);
 
   /* Fetch real album art via free iTunes Search API */
@@ -177,6 +181,18 @@ export default function LandingPage({
 
   return (
     <div className="min-h-screen bg-zinc-950 text-white overflow-x-hidden">
+      <SpotifyConnectModal
+        open={spotifyModalOpen}
+        onClose={() => setSpotifyModalOpen(false)}
+        onConnected={() => {
+          setSpotifyAuth(getStoredSpotifyAuth());
+          setConnectedSource('spotify');
+        }}
+        onDisconnected={() => {
+          setSpotifyAuth(null);
+          if (connectedSource === 'spotify') setConnectedSource('youtube');
+        }}
+      />
       {/* ───────── NAV ───────── */}
       <header className="sticky top-0 z-40 border-b border-white/5 bg-zinc-950/80 backdrop-blur-xl">
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-2 px-4 py-3 sm:px-8 sm:py-3.5">
@@ -204,11 +220,19 @@ export default function LandingPage({
                 className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-2 text-xs font-semibold transition sm:gap-2 sm:px-4 sm:py-2.5 sm:text-sm cursor-pointer ${
                   connectedSource === 'youtube'
                     ? 'border-red-500/30 bg-red-500/10 text-red-400'
-                    : 'border-violet-500/30 bg-violet-500/10 text-violet-300'
+                    : connectedSource === 'spotify'
+                      ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400'
+                      : 'border-violet-500/30 bg-violet-500/10 text-violet-300'
                 }`}
               >
-                <span className={`h-2 w-2 rounded-full ${connectedSource === 'youtube' ? 'bg-red-500' : 'bg-violet-400'}`} />
-                {connectedSource === 'youtube' ? 'YouTube' : 'Audio Only'}
+                <span className={`h-2 w-2 rounded-full ${
+                  connectedSource === 'youtube'
+                    ? 'bg-red-500'
+                    : connectedSource === 'spotify'
+                      ? 'bg-emerald-500'
+                      : 'bg-violet-400'
+                }`} />
+                {connectedSource === 'youtube' ? 'YouTube' : connectedSource === 'spotify' ? 'Spotify' : 'Audio Only'}
                 <ChevronDown className={`h-3.5 w-3.5 transition-transform ${connectOpen ? 'rotate-180' : ''}`} />
               </button>
 
@@ -254,19 +278,41 @@ export default function LandingPage({
                     </div>
                   </button>
 
-                  {/* Spotify — Coming Soon / Unavailable */}
-                  <div className="mt-1 flex w-full items-center gap-3 rounded-xl px-3 py-3 opacity-60 cursor-not-allowed">
-                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-600/40 text-white">
+                  {/* Spotify — Premium Web Playback SDK */}
+                  <button
+                    onClick={() => {
+                      setConnectOpen(false);
+                      if (spotifyAuth?.accessToken) {
+                        setConnectedSource('spotify');
+                      } else {
+                        setSpotifyModalOpen(true);
+                      }
+                    }}
+                    className={`mt-1 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left transition cursor-pointer ${
+                      connectedSource === 'spotify' ? 'bg-emerald-500/10' : 'hover:bg-white/5'
+                    }`}
+                  >
+                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-500 text-zinc-950 shadow">
                       <svg className="h-5 w-5" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.479.659.301 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141C9.6 9.9 15 10.561 18.72 12.84c.361.181.54.78.241 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.301c-.6.179-1.2-.181-1.38-.721-.18-.601.18-1.2.72-1.381 4.26-1.26 11.28-1.02 15.721 1.621.539.3.719 1.02.419 1.56-.299.421-1.02.599-1.559.3z"/></svg>
                     </span>
                     <div className="flex-1">
                       <div className="flex items-center justify-between">
-                        <span className="text-sm font-bold text-zinc-300">Spotify</span>
-                        <span className="rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-bold text-zinc-400">Coming Soon</span>
+                        <span className="text-sm font-bold text-white">Spotify</span>
+                        {connectedSource === 'spotify' ? (
+                          <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-bold text-emerald-400">Active</span>
+                        ) : spotifyAuth?.accessToken ? (
+                          <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-bold text-emerald-300">Connected</span>
+                        ) : (
+                          <span className="rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-bold text-zinc-300">Premium</span>
+                        )}
                       </div>
-                      <p className="mt-0.5 text-xs text-zinc-500">Unavailable pending policy authorization</p>
+                      <p className="mt-0.5 text-xs text-zinc-500">
+                        {spotifyAuth?.user?.displayName
+                          ? `Signed in as ${spotifyAuth.user.displayName}`
+                          : 'Connect Spotify Premium account'}
+                      </p>
                     </div>
-                  </div>
+                  </button>
                 </div>
               )}
             </div>

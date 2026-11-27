@@ -33,7 +33,9 @@ import { INITIAL_TRACKS, SEARCH_CATALOG, formatTime } from '../data/mockTracks';
 import { useRoom } from '../context/RoomContext';
 import { searchMusicBackend } from '../services/apiClient';
 import { searchRealSongs } from '../utils/artworkApi';
+import { getStoredSpotifyAuth } from '../utils/spotifyAuth';
 import AudioVisualizerCanvas from './AudioVisualizerCanvas';
+import SpotifyConnectModal from './SpotifyConnectModal';
 
 const THEME_STYLES = {
   midnight: { bg: 'bg-zinc-950', accent: '#7c3aed', image: '/themes/midnight-bg.jpg', anim: 'animate-midnight', tint: 'from-indigo-950/40 via-zinc-950/55 to-zinc-950/90' },
@@ -124,6 +126,7 @@ export default function RoomView({ isDemo = false, onLeave }) {
   const [showMetrics, setShowMetrics] = useState(false);
   const [showPrivacy, setShowPrivacy] = useState(false);
   const [showSessionSummary, setShowSessionSummary] = useState(false);
+  const [showSpotifyModal, setShowSpotifyModal] = useState(false);
   const chatTypingTimerRef = useRef(null);
   const lastSeenChatIdRef = useRef(null);
   const knownParticipantIdsRef = useRef(null);
@@ -336,6 +339,10 @@ export default function RoomView({ isDemo = false, onLeave }) {
       setDemoSource(nextSource);
       return;
     }
+    if (nextSource === 'spotify' && !getStoredSpotifyAuth()?.accessToken) {
+      setShowSpotifyModal(true);
+      return;
+    }
     await sendCommand('participant:update', { source: nextSource });
   };
 
@@ -442,6 +449,18 @@ export default function RoomView({ isDemo = false, onLeave }) {
         />
         <div className={`absolute inset-0 bg-gradient-to-b ${(THEME_STYLES[theme] || THEME_STYLES.midnight).tint}`} />
       </div>
+      {/* Spotify Connect Modal */}
+      <SpotifyConnectModal
+        open={showSpotifyModal}
+        onClose={() => setShowSpotifyModal(false)}
+        onConnected={() => sendCommand('participant:update', { source: 'spotify' })}
+        onDisconnected={() => {
+          if (mySource === 'spotify') {
+            sendCommand('participant:update', { source: 'youtube' });
+          }
+        }}
+      />
+
       {/* Session Summary Modal */}
       {showSessionSummary && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm">
@@ -1020,9 +1039,11 @@ export default function RoomView({ isDemo = false, onLeave }) {
                     Audio Only
                   </button>
                   <button
-                    disabled
-                    title="Spotify playback unavailable pending policy authorization"
-                    className="flex-1 rounded-full px-2 py-1.5 text-center text-xs font-semibold text-zinc-600 sm:flex-none sm:px-3 cursor-not-allowed"
+                    onClick={() => handleSourceSwitch('spotify')}
+                    title="Spotify Premium (Web Playback SDK)"
+                    className={`flex-1 rounded-full px-2 py-1.5 text-center text-xs font-semibold transition sm:flex-none sm:px-3 cursor-pointer ${
+                      mySource === 'spotify' ? 'bg-emerald-500 text-zinc-950 font-bold' : 'text-zinc-300 hover:text-white'
+                    }`}
                   >
                     Spotify
                   </button>
@@ -1063,8 +1084,13 @@ export default function RoomView({ isDemo = false, onLeave }) {
                       </div>
 
                       <div className="w-full flex-1 text-center sm:text-left">
-                        <span className="mb-2 inline-flex items-center gap-1.5 rounded-full border border-violet-500/30 bg-violet-500/15 px-2.5 py-0.5 text-[10px] font-bold tracking-wider text-violet-300 uppercase">
-                          <Volume2 className="h-3 w-3" /> Audio Only &middot; Background Play
+                        <span className={`mb-2 inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[10px] font-bold tracking-wider uppercase ${
+                          mySource === 'spotify'
+                            ? 'border-emerald-500/30 bg-emerald-500/15 text-emerald-300'
+                            : 'border-violet-500/30 bg-violet-500/15 text-violet-300'
+                        }`}>
+                          <Volume2 className="h-3 w-3" />{' '}
+                          {mySource === 'spotify' ? 'Spotify Premium · Synced' : 'Audio Only · Background Play'}
                         </span>
                         <h2 className="font-display text-2xl font-bold tracking-tight text-white sm:text-3xl">
                           {currentTrack.title}

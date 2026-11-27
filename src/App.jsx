@@ -1,5 +1,6 @@
 import React, { lazy, Suspense, useEffect, useState } from 'react';
 import { RoomProvider, useRoom } from './context/RoomContext';
+import { handleSpotifyCallback } from './utils/spotifyAuth';
 
 const LandingPage = lazy(() => import('./components/LandingPage'));
 const RoomView = lazy(() => import('./components/RoomView'));
@@ -85,6 +86,10 @@ function DuetAppShell() {
   const { roomState, roomError, pendingApproval, createRoom, joinRoom } = useRoom();
   const [demoActive, setDemoActive] = useState(false);
   const [roomLoading, setRoomLoading] = useState(false);
+  const [spotifyCallbackError, setSpotifyCallbackError] = useState('');
+  const [isHandlingSpotifyCallback, setIsHandlingSpotifyCallback] = useState(
+    () => window.location.pathname === '/spotify-callback'
+  );
   const [lastRoomCode, setLastRoomCode] = useState(() => {
     try {
       return localStorage.getItem(LAST_ROOM_KEY) || '';
@@ -93,8 +98,24 @@ function DuetAppShell() {
     }
   });
 
+  // Handle /spotify-callback OAuth PKCE redirect
+  useEffect(() => {
+    if (!isHandlingSpotifyCallback) return;
+    handleSpotifyCallback(window.location.search)
+      .then(({ returnPath }) => {
+        window.history.replaceState(null, '', returnPath || '/');
+        setIsHandlingSpotifyCallback(false);
+      })
+      .catch((err) => {
+        setSpotifyCallbackError(err.message || 'Spotify login failed');
+        window.history.replaceState(null, '', '/');
+        setIsHandlingSpotifyCallback(false);
+      });
+  }, [isHandlingSpotifyCallback]);
+
   // Handle /room/:code invitation links
   useEffect(() => {
+    if (isHandlingSpotifyCallback) return;
     const match = /^\/room\/([A-Za-z0-9]{4,8})$/i.exec(window.location.pathname);
     if (match) {
       const code = match[1].toUpperCase();
@@ -103,7 +124,7 @@ function DuetAppShell() {
         .catch(() => {})
         .finally(() => setRoomLoading(false));
     }
-  }, [joinRoom]);
+  }, [joinRoom, isHandlingSpotifyCallback]);
 
   useEffect(() => {
     if (roomState?.roomCode) {
@@ -148,6 +169,10 @@ function DuetAppShell() {
     }
   };
 
+  if (isHandlingSpotifyCallback) {
+    return <LoadingFallback />;
+  }
+
   if (demoActive) {
     return (
       <Suspense fallback={<LoadingFallback />}>
@@ -172,7 +197,7 @@ function DuetAppShell() {
         onOpenDemo={() => setDemoActive(true)}
         lastRoomCode={lastRoomCode}
         roomLoading={roomLoading}
-        roomError={roomError}
+        roomError={spotifyCallbackError || roomError}
         pendingApproval={pendingApproval}
       />
     </Suspense>
