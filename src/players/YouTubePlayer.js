@@ -168,6 +168,7 @@ export class YouTubePlayer extends BasePlayer {
             }
           },
           onError: (event) => {
+            this.state = 'error';
             const code = event.data;
             const message = YT_ERROR_MESSAGES[code] || `YouTube player error (${code})`;
             const isEmbedBlocked = code === 101 || code === 150 || code === 100;
@@ -181,6 +182,8 @@ export class YouTubePlayer extends BasePlayer {
   async loadTrack(track, startPositionMs = 0, shouldPlay = false) {
     const videoId = track?.youtubeId;
     if (!videoId) {
+      this.state = 'error';
+      this.currentVideoId = null;
       this.callbacks.onError?.({
         code: 'NO_YOUTUBE_ID',
         message: 'This track does not have a verified embeddable YouTube video ID.',
@@ -195,6 +198,7 @@ export class YouTubePlayer extends BasePlayer {
       return;
     }
 
+    this.state = shouldPlay ? 'buffering' : 'cued';
     this.currentVideoId = videoId;
     if (!this.isReady || !this.player) {
       this.pendingVideo = { videoId, startSec, shouldPlay };
@@ -234,17 +238,18 @@ export class YouTubePlayer extends BasePlayer {
   }
 
   async getDuration() {
-    if (!this.isReady || !this.player || typeof this.player.getDuration !== 'function') {
-      return 0;
-    }
-    return Math.max(0, Math.round(this.player.getDuration() * 1000));
+    // The iframe can still return the preceding video's duration while the
+    // next video buffers or fails. Wait for confirmed playback of this ID.
+    if (!this.isReady || this.state !== 'playing' || !this.currentVideoId ||
+        this.readLoadedVideoId() !== this.currentVideoId) return 0;
+    return Math.max(0, Math.round((this.player?.getDuration?.() || 0) * 1000));
   }
 
   // The video ID the YouTube player has ACTUALLY loaded right now, parsed
   // from getVideoUrl(). This is the ground truth — currentVideoId is set
   // when loadTrack is called, before the new video finishes loading, so it
   // cannot tell the drift loop whether the new video is on screen yet (B1).
-  async getLoadedVideoId() {
+  readLoadedVideoId() {
     try {
       const url = this.player?.getVideoUrl?.();
       if (typeof url === 'string' && url) {
@@ -252,9 +257,13 @@ export class YouTubePlayer extends BasePlayer {
         if (v && /^[A-Za-z0-9_-]{11}$/.test(v)) return v;
       }
     } catch {
-      // Fall through to currentVideoId
+      // An unreadable URL cannot confirm the video identity.
     }
-    return this.currentVideoId || null;
+    return null;
+  }
+
+  async getLoadedVideoId() {
+    return this.readLoadedVideoId() || this.currentVideoId || null;
   }
 
   async getState() {
