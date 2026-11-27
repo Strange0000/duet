@@ -2,14 +2,52 @@ import { env } from '../config/env.js';
 
 const searchCache = new Map();
 const CACHE_TTL_MS = 5 * 60 * 1000;
+const MAX_SEARCH_CACHE_ENTRIES = 200;
 
-function parseIsoDurationToSec(iso) {
-  const match = /PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/.exec(iso || '');
+// YouTube Data API v3 quota guard (N-31): in-memory count of YouTube Data API
+// calls per calendar day. The default free quota is 10,000 units/day; we stop
+// at 9,000 to leave headroom. Resets at midnight (local server date).
+const YOUTUBE_QUOTA_DAILY_LIMIT = 9000;
+let youtubeQuotaDay = null;
+let youtubeQuotaCount = 0;
+
+function youtubeQuotaDayKey() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function consumeYouTubeQuota(units = 1) {
+  const today = youtubeQuotaDayKey();
+  if (youtubeQuotaDay !== today) {
+    youtubeQuotaDay = today;
+    youtubeQuotaCount = 0;
+  }
+  if (youtubeQuotaCount + units > YOUTUBE_QUOTA_DAILY_LIMIT) return false;
+  youtubeQuotaCount += units;
+  return true;
+}
+
+export function getYouTubeQuotaUsage() {
+  const today = youtubeQuotaDayKey();
+  if (youtubeQuotaDay !== today) return { day: today, count: 0, limit: YOUTUBE_QUOTA_DAILY_LIMIT };
+  return { day: youtubeQuotaDay, count: youtubeQuotaCount, limit: YOUTUBE_QUOTA_DAILY_LIMIT };
+}
+
+// Test-only hook: lets tests simulate a nearly-exhausted quota without
+// making 9,000 real API calls.
+export function __setYouTubeQuotaForTest(count) {
+  youtubeQuotaDay = youtubeQuotaDayKey();
+  youtubeQuotaCount = count;
+}
+
+export function parseIsoDurationToSec(iso) {
+  // Handles days (P1DT2H3M4S), plain days (P1D) and fractional seconds (PT1M30.5S).
+  const match = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?)?$/.exec(iso || '');
   if (!match) return 0;
-  const h = Number(match[1] || 0);
-  const m = Number(match[2] || 0);
-  const s = Number(match[3] || 0);
-  return h * 3600 + m * 60 + s;
+  const d = Number(match[1] || 0);
+  const h = Number(match[2] || 0);
+  const m = Number(match[3] || 0);
+  const s = Number(match[4] || 0);
+  return d * 86400 + h * 3600 + m * 60 + s;
 }
 
 function isBadVariantTitle(title) {
@@ -25,23 +63,41 @@ function normalizeText(str) {
     .trim();
 }
 
+function isYouTubeHost(hostname) {
+  const host = String(hostname || '').toLowerCase();
+  // Exact host matching (N-27): the host must be youtube.com / youtu.be or a
+  // subdomain of one of them. `notyoutube.com` and `evil-youtu.be` fail both
+  // checks because they do not equal the bare domain and do not end with
+  // ".youtube.com" / ".youtu.be".
+  return (
+    host === 'youtube.com' ||
+    host.endsWith('.youtube.com') ||
+    host === 'youtu.be' ||
+    host.endsWith('.youtu.be')
+  );
+}
+
+function isShortHost(hostname) {
+  const host = String(hostname || '').toLowerCase();
+  return host === 'youtu.be' || host.endsWith('.youtu.be');
+}
+
 export function extractYouTubeId(input) {
   const trimmed = String(input || '').trim();
   if (/^[A-Za-z0-9_-]{11}$/.test(trimmed)) return trimmed;
   try {
     const url = new URL(trimmed);
-    if (url.hostname.includes('youtu.be')) {
+    if (!isYouTubeHost(url.hostname)) return null;
+    if (isShortHost(url.hostname)) {
       const id = url.pathname.replace(/^\//, '').slice(0, 11);
       return /^[A-Za-z0-9_-]{11}$/.test(id) ? id : null;
     }
-    if (url.hostname.includes('youtube.com')) {
-      const v = url.searchParams.get('v');
-      if (v && /^[A-Za-z0-9_-]{11}$/.test(v)) return v;
-      const parts = url.pathname.split('/').filter(Boolean);
-      const idx = parts.findIndex((p) => p === 'shorts' || p === 'embed' || p === 'live');
-      if (idx !== -1 && parts[idx + 1] && /^[A-Za-z0-9_-]{11}$/.test(parts[idx + 1])) {
-        return parts[idx + 1];
-      }
+    const v = url.searchParams.get('v');
+    if (v && /^[A-Za-z0-9_-]{11}$/.test(v)) return v;
+    const parts = url.pathname.split('/').filter(Boolean);
+    const idx = parts.findIndex((p) => p === 'shorts' || p === 'embed' || p === 'live');
+    if (idx !== -1 && parts[idx + 1] && /^[A-Za-z0-9_-]{11}$/.test(parts[idx + 1])) {
+      return parts[idx + 1];
     }
   } catch {
     // Not a URL
@@ -85,6 +141,9 @@ export async function lookupYouTubeVideo(videoId) {
 
   try {
     if (env.YOUTUBE_API_KEY) {
+      if (!consumeYouTubeQuota(1)) {
+        return { error: 'YouTube search quota exhausted for today' };
+      }
       const detailsUrl = new URL('https://www.googleapis.com/youtube/v3/videos');
       detailsUrl.searchParams.set('part', 'snippet,contentDetails,status');
       detailsUrl.searchParams.set('id', id);
@@ -132,7 +191,11 @@ export async function lookupYouTubeVideo(videoId) {
         title: oData.title || 'YouTube Track',
         artist: oData.author_name?.replace(/\s*-\s*Topic$/i, '') || 'YouTube',
         album: 'YouTube',
-        durationSec: 210,
+        // N-02: duration is UNKNOWN without the Data API — oEmbed does not
+        // report it. Returning a fabricated 210s made the room clamp every
+        // pasted-URL song back to 3:30. The client reports the real duration
+        // via `player:duration` once playback starts.
+        durationSec: null,
         coverImage: oData.thumbnail_url || `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
         youtubeId: id,
         sourceAttribution: 'YouTube (oEmbed)',
@@ -151,6 +214,10 @@ export async function lookupYouTubeVideo(videoId) {
 export async function searchYouTubeVideos(query, maxResults = 6) {
   if (!env.YOUTUBE_API_KEY) {
     return { items: [], configured: false };
+  }
+  // N-31: stop before burning the daily YouTube Data API quota.
+  if (!consumeYouTubeQuota(1)) {
+    return { items: [], configured: true, error: 'YouTube search quota exhausted for today' };
   }
 
   const controller = new AbortController();
@@ -177,6 +244,9 @@ export async function searchYouTubeVideos(query, maxResults = 6) {
 
     if (videoIds.length === 0) return { items: [], configured: true };
 
+    if (!consumeYouTubeQuota(1)) {
+      return { items: [], configured: true, error: 'YouTube search quota exhausted for today' };
+    }
     const detailsUrl = new URL('https://www.googleapis.com/youtube/v3/videos');
     detailsUrl.searchParams.set('part', 'snippet,contentDetails,status');
     detailsUrl.searchParams.set('id', videoIds.join(','));
@@ -245,6 +315,10 @@ export async function searchItunesCatalog(query, limit = 8) {
       coverImage: item.artworkUrl100
         ? item.artworkUrl100.replace('100x100bb', '600x600bb')
         : null,
+      // N-01: keep youtubeId null (never fabricate one), but expose the
+      // 30-second iTunes preview so the client can play a preview while it
+      // resolves the track to a real YouTube video via /api/youtube/resolve.
+      previewUrl: item.previewUrl || null,
       youtubeId: null,
       sourceAttribution: 'Apple Music / iTunes',
       attributionUrl: item.trackViewUrl || 'https://music.apple.com',
@@ -252,6 +326,36 @@ export async function searchItunesCatalog(query, limit = 8) {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+/**
+ * Resolve an iTunes-style search result (title + artist) to the best matching
+ * embeddable YouTube video (N-01). Only works when YOUTUBE_API_KEY is set;
+ * otherwise honestly reports `configured: false` — no scraping, no fabricated IDs.
+ */
+export async function resolveYouTubeTrack(title, artist = '') {
+  if (!env.YOUTUBE_API_KEY) {
+    return { item: null, configured: false };
+  }
+  const query = [String(title || '').trim(), String(artist || '').trim()]
+    .filter(Boolean)
+    .join(' ');
+  const result = await searchYouTubeVideos(query, 6);
+  if (result.error) {
+    return { item: null, configured: true, error: result.error };
+  }
+  const items = result.items || [];
+  if (items.length === 0) return { item: null, configured: true };
+  let best = null;
+  let bestScore = 0;
+  for (const item of items) {
+    const score = scoreYouTubeCandidate(item, title, artist);
+    if (score > bestScore) {
+      bestScore = score;
+      best = item;
+    }
+  }
+  return { item: bestScore > 0 ? best : null, configured: true };
 }
 
 export async function unifiedSearch(query) {
@@ -275,8 +379,12 @@ export async function unifiedSearch(query) {
   if (!normalized) return { items: [], youtubeConfigured: Boolean(env.YOUTUBE_API_KEY) };
 
   const cached = searchCache.get(normalized);
-  if (cached && Date.now() - cached.at < CACHE_TTL_MS) {
-    return cached.data;
+  if (cached) {
+    if (Date.now() - cached.at < CACHE_TTL_MS) {
+      return cached.data;
+    }
+    // N-14: drop expired entries when they are read.
+    searchCache.delete(normalized);
   }
 
   const [ytResult, itunesItems] = await Promise.allSettled([
@@ -294,6 +402,15 @@ export async function unifiedSearch(query) {
     youtubeConfigured: ytConfigured,
   };
 
+  // N-14: cap the cache at 200 entries (evict oldest first) and drop expired
+  // entries when a new entry is written.
+  for (const [key, entry] of searchCache.entries()) {
+    if (Date.now() - entry.at >= CACHE_TTL_MS) searchCache.delete(key);
+  }
+  if (!searchCache.has(normalized) && searchCache.size >= MAX_SEARCH_CACHE_ENTRIES) {
+    const oldest = searchCache.keys().next().value;
+    if (oldest !== undefined) searchCache.delete(oldest);
+  }
   searchCache.set(normalized, { at: Date.now(), data: payload });
   return payload;
 }

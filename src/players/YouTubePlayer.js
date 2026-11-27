@@ -2,6 +2,8 @@ import { BasePlayer } from './BasePlayer.js';
 
 let ytApiPromise = null;
 
+const YT_LOAD_TIMEOUT_MS = 15000;
+
 function loadYouTubeIframeAPI() {
   if (typeof window === 'undefined') {
     return Promise.reject(new Error('YouTube API requires a browser environment'));
@@ -12,19 +14,49 @@ function loadYouTubeIframeAPI() {
   if (ytApiPromise) return ytApiPromise;
 
   ytApiPromise = new Promise((resolve, reject) => {
+    let settled = false;
     const existingScript = document.querySelector('script[src="https://www.youtube.com/iframe_api"]');
     const prevReady = window.onYouTubeIframeAPIReady;
 
+    const cleanup = () => {
+      clearTimeout(timer);
+      clearInterval(poll);
+    };
+    const fail = (err) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      ytApiPromise = null;
+      reject(err);
+    };
+    const succeed = () => {
+      if (settled) return;
+      if (!window.YT || !window.YT.Player) return;
+      settled = true;
+      cleanup();
+      resolve(window.YT);
+    };
+
+    // 15s timeout: the script tag may already exist (or be blocked by an
+    // ad-blocker) yet the API never loads — never hang forever (N-07).
+    const timer = setTimeout(
+      () => fail(new Error('YouTube player failed to load — check your connection or ad-blocker')),
+      YT_LOAD_TIMEOUT_MS
+    );
+    // Poll as well as waiting on the callback: if the script tag already
+    // exists but the ready callback never fires, the poll still notices.
+    const poll = setInterval(succeed, 250);
+
     window.onYouTubeIframeAPIReady = () => {
       if (typeof prevReady === 'function') prevReady();
-      resolve(window.YT);
+      succeed();
     };
 
     if (!existingScript) {
       const tag = document.createElement('script');
       tag.src = 'https://www.youtube.com/iframe_api';
       tag.async = true;
-      tag.onerror = () => reject(new Error('Failed to load YouTube IFrame API'));
+      tag.onerror = () => fail(new Error('Failed to load YouTube IFrame API'));
       document.head.appendChild(tag);
     }
   });
@@ -53,6 +85,8 @@ export class YouTubePlayer extends BasePlayer {
     this.state = 'idle';
     this.isReady = false;
     this.pendingVideo = null;
+    this.volume = 0.85;
+    this.muted = false;
   }
 
   getCapabilities() {
@@ -97,9 +131,21 @@ export class YouTubePlayer extends BasePlayer {
             this.state = 'ready';
             this.callbacks.onReady?.();
             if (this.pendingVideo) {
-              const { videoId, startSec } = this.pendingVideo;
+              const { videoId, startSec, shouldPlay } = this.pendingVideo;
               this.pendingVideo = null;
-              this.player.cueVideoById({ videoId, startSeconds: startSec });
+              // B1: load AND play when the room is playing, otherwise cue paused.
+              if (shouldPlay) {
+                this.player.loadVideoById({ videoId, startSeconds: startSec });
+              } else {
+                this.player.cueVideoById({ videoId, startSeconds: startSec });
+              }
+            }
+            // Apply any volume/muted state set before the player was ready.
+            try {
+              this.player.setVolume(Math.round(this.volume * 100));
+              if (this.muted) this.player.mute();
+            } catch {
+              // Ignore — volume can be re-applied later via setVolume/setMuted
             }
             resolve();
           },
@@ -132,7 +178,7 @@ export class YouTubePlayer extends BasePlayer {
     });
   }
 
-  async loadTrack(track, startPositionMs = 0) {
+  async loadTrack(track, startPositionMs = 0, shouldPlay = false) {
     const videoId = track?.youtubeId;
     if (!videoId) {
       this.callbacks.onError?.({
@@ -151,11 +197,18 @@ export class YouTubePlayer extends BasePlayer {
 
     this.currentVideoId = videoId;
     if (!this.isReady || !this.player) {
-      this.pendingVideo = { videoId, startSec };
+      this.pendingVideo = { videoId, startSec, shouldPlay };
       return;
     }
 
-    this.player.cueVideoById({ videoId, startSeconds: startSec });
+    // B1: cueVideoById loads paused, so a play() issued right after it is
+    // lost while the video is still loading and the OLD video keeps playing.
+    // loadVideoById loads AND plays, so use it when the room is playing.
+    if (shouldPlay) {
+      this.player.loadVideoById({ videoId, startSeconds: startSec });
+    } else {
+      this.player.cueVideoById({ videoId, startSeconds: startSec });
+    }
   }
 
   async play() {
@@ -189,6 +242,38 @@ export class YouTubePlayer extends BasePlayer {
 
   async getState() {
     return this.state;
+  }
+
+  async setVolume(volume01) {
+    this.volume = Math.max(0, Math.min(1, Number(volume01) || 0));
+    if (!this.isReady || !this.player || typeof this.player.setVolume !== 'function') return;
+    try {
+      this.player.setVolume(Math.round(this.volume * 100));
+    } catch {
+      // Ignore
+    }
+  }
+
+  async setMuted(muted) {
+    this.muted = Boolean(muted);
+    if (!this.isReady || !this.player) return;
+    try {
+      if (this.muted) this.player.mute();
+      else this.player.unMute();
+    } catch {
+      // Ignore
+    }
+  }
+
+  async getVolume() {
+    if (this.isReady && this.player && typeof this.player.getVolume === 'function') {
+      try {
+        return Math.max(0, Math.min(1, this.player.getVolume() / 100));
+      } catch {
+        // Fall through to the stored value
+      }
+    }
+    return this.muted ? 0 : this.volume;
   }
 
   async destroy() {

@@ -55,11 +55,32 @@ export async function searchRealSongs(query, limit = 8) {
       coverGradient: 'from-violet-600 via-fuchsia-500 to-orange-400',
       accentColor: '#7c3aed',
       secondaryColor: '#f43f5e',
-      youtubeId: `yt_${item.trackId}`,
-      spotifyUri: `spotify:track:${item.trackId}`,
-      ytOffsetMs: 0,
+      // N-01: never fabricate playable IDs. iTunes gives no YouTube/Spotify
+      // IDs, so these stay null until resolveYouTubeTrack() finds a real one.
+      youtubeId: null,
+      spotifyUri: null,
     }));
   } catch {
     return [];
+  }
+}
+
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+
+/**
+ * Resolve a title/artist to a real, playable YouTube video via the backend
+ * (GET /api/youtube/resolve). Returns { item | null, configured } where item
+ * has a real youtubeId + durationSec when the YouTube API key is configured.
+ * Returns null on network/HTTP failure.
+ */
+export async function resolveYouTubeTrack(title, artist = '') {
+  try {
+    const res = await fetch(
+      `${API_URL}/api/youtube/resolve?title=${encodeURIComponent(title || '')}&artist=${encodeURIComponent(artist || '')}`
+    );
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
   }
 }

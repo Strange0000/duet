@@ -1,4 +1,4 @@
-import React, { lazy, Suspense, useEffect, useState } from 'react';
+import React, { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { RoomProvider, useRoom } from './context/RoomContext';
 import { handleSpotifyCallback } from './utils/spotifyAuth';
 
@@ -6,6 +6,7 @@ const LandingPage = lazy(() => import('./components/LandingPage'));
 const RoomView = lazy(() => import('./components/RoomView'));
 
 const LAST_ROOM_KEY = 'duet_last_room';
+const SESSION_STORAGE_KEY = 'duet_active_session';
 
 /* ——— Loading Spinner ——— */
 function LoadingFallback() {
@@ -82,11 +83,105 @@ function PWAInstallBanner() {
   );
 }
 
+/* ——— M7: dedicated screen for a room link that does not exist / expired.
+   The URL stays at /room/<code>; this is NOT the landing page with a tiny
+   error line. ——— */
+function RoomNotFoundScreen({ code, onCreateRoom, onJoinRoom, roomLoading }) {
+  const [joinCode, setJoinCode] = useState('');
+  const [joinErr, setJoinErr] = useState('');
+
+  const handleJoin = (e) => {
+    e.preventDefault();
+    const c = joinCode.trim().toUpperCase();
+    if (c.length !== 6) {
+      setJoinErr('Enter the 6-character room code');
+      return;
+    }
+    setJoinErr('');
+    onJoinRoom(c, 'youtube');
+  };
+
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-zinc-950 px-5 text-white">
+      <div className="w-full max-w-md text-center">
+        <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-3xl bg-rose-500/15 text-rose-400">
+          <svg className="h-8 w-8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="11" cy="11" r="8" />
+            <path d="m21 21-4.3-4.3" />
+          </svg>
+        </div>
+        <h1 className="mt-6 font-display text-3xl font-bold tracking-tight">
+          This room doesn&apos;t exist or has expired
+        </h1>
+        <p className="mt-3 text-sm leading-relaxed text-zinc-400">
+          The link for room <span className="font-mono font-bold text-white">{code}</span> didn&apos;t
+          lead anywhere. Rooms close when the host leaves, so the code may have
+          expired — check the code, ask the host for a new link, or start your own room.
+        </p>
+        <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-center">
+          <button
+            onClick={() => onCreateRoom('youtube')}
+            disabled={roomLoading}
+            className="rounded-full bg-white px-6 py-3 text-sm font-bold text-zinc-950 transition hover:bg-zinc-200 disabled:opacity-50 cursor-pointer"
+          >
+            {roomLoading ? 'Creating your room…' : 'Start a new room'}
+          </button>
+          <button
+            onClick={() => {
+              if (window.location.pathname !== '/') {
+                window.history.replaceState(null, '', '/');
+              }
+              window.location.reload();
+            }}
+            className="rounded-full border border-white/10 bg-white/5 px-6 py-3 text-sm font-semibold text-white transition hover:bg-white/10 cursor-pointer"
+          >
+            Back to home
+          </button>
+        </div>
+        {roomLoading && (
+          <p className="mt-3 text-xs text-zinc-500">
+            Creating your room… this can take up to ~60 seconds while the server wakes up.
+          </p>
+        )}
+        <form onSubmit={handleJoin} className="mx-auto mt-8 flex max-w-sm items-center rounded-full border border-white/10 bg-white/5 p-1 pl-4 backdrop-blur-sm transition focus-within:border-white/25">
+          <input
+            type="text"
+            maxLength={8}
+            value={joinCode}
+            onChange={(e) => { setJoinCode(e.target.value.toUpperCase()); setJoinErr(''); }}
+            placeholder="Try another code"
+            aria-label="Room code"
+            className="w-full bg-transparent text-sm font-medium tracking-wider text-white uppercase placeholder:normal-case placeholder:tracking-normal placeholder:text-zinc-500 focus:outline-none"
+          />
+          <button type="submit" disabled={roomLoading} className="shrink-0 rounded-full bg-white/10 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/20 disabled:opacity-50 cursor-pointer">
+            Join
+          </button>
+        </form>
+        {joinErr && <p className="mt-2 text-xs font-medium text-rose-400">{joinErr}</p>}
+      </div>
+    </div>
+  );
+}
+
 function DuetAppShell() {
-  const { roomState, roomError, pendingApproval, createRoom, joinRoom } = useRoom();
+  const {
+    roomState,
+    roomError,
+    pendingApproval,
+    createRoom,
+    joinRoom,
+    clearRoomError,
+    setRoomError,
+  } = useRoom();
   const [demoActive, setDemoActive] = useState(false);
+  // M6: the track a trending card asked the demo to start with (null = default).
+  const [demoTrack, setDemoTrack] = useState(null);
+  // M9: demo state lives here so leaving/re-entering the demo preserves its
+  // paused state, track, queue and chat while the page is open.
+  const [demoState, setDemoState] = useState(null);
   const [roomLoading, setRoomLoading] = useState(false);
   const [spotifyCallbackError, setSpotifyCallbackError] = useState('');
+  const [roomNotFound, setRoomNotFound] = useState(null);
   const [isHandlingSpotifyCallback, setIsHandlingSpotifyCallback] = useState(
     () => window.location.pathname === '/spotify-callback'
   );
@@ -97,6 +192,12 @@ function DuetAppShell() {
       return '';
     }
   });
+  const joinAttemptedRef = useRef(null);
+
+  const clearError = () => {
+    if (typeof clearRoomError === 'function') clearRoomError();
+    else if (typeof setRoomError === 'function') setRoomError(null);
+  };
 
   // Handle /spotify-callback OAuth PKCE redirect
   useEffect(() => {
@@ -113,21 +214,45 @@ function DuetAppShell() {
       });
   }, [isHandlingSpotifyCallback]);
 
+  // M7: clear any stale room error when the landing page mounts.
+  useEffect(() => {
+    clearError();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Handle /room/:code invitation links
   useEffect(() => {
     if (isHandlingSpotifyCallback) return;
     const match = /^\/room\/([A-Z2-9]{6})$/i.exec(window.location.pathname);
-    if (match) {
-      const code = match[1].toUpperCase();
-      setRoomLoading(true);
-      joinRoom({ roomCode: code, name: 'Guest', source: 'youtube' })
-        .catch(() => {})
-        .finally(() => setRoomLoading(false));
+    if (!match) return;
+    const code = match[1].toUpperCase();
+    if (joinAttemptedRef.current === code) return;
+    joinAttemptedRef.current = code;
+    setRoomLoading(true);
+    // M4 (client part): reuse the stored session for this room so the server
+    // reuses the existing participant instead of returning ROOM_FULL.
+    let sessionToken;
+    try {
+      const stored = JSON.parse(sessionStorage.getItem(SESSION_STORAGE_KEY) || 'null');
+      if (stored?.roomCode === code && stored?.sessionToken) {
+        sessionToken = stored.sessionToken;
+      }
+    } catch {
+      // Ignore malformed stored session
     }
+    joinRoom({ roomCode: code, name: 'Guest', source: 'youtube', sessionToken })
+      .then(() => setRoomNotFound(null))
+      .catch((err) => {
+        if (/not found|expired|ROOM_NOT_FOUND/i.test(err?.message || roomError || '')) {
+          setRoomNotFound(code);
+        }
+      })
+      .finally(() => setRoomLoading(false));
   }, [joinRoom, isHandlingSpotifyCallback]);
 
   useEffect(() => {
     if (roomState?.roomCode) {
+      setRoomNotFound(null);
       try {
         localStorage.setItem(LAST_ROOM_KEY, roomState.roomCode);
         setLastRoomCode(roomState.roomCode);
@@ -142,6 +267,7 @@ function DuetAppShell() {
 
   const handleCreateRoom = async (source = 'youtube') => {
     setRoomLoading(true);
+    setRoomNotFound(null);
     try {
       await createRoom({ name: 'Host', source });
     } catch {
@@ -153,17 +279,32 @@ function DuetAppShell() {
 
   const handleJoinRoom = async (code, source = 'youtube') => {
     setRoomLoading(true);
+    setRoomNotFound(null);
     try {
       await joinRoom({ roomCode: code, name: 'Guest', source });
-    } catch {
-      // Handled by roomError
+    } catch (err) {
+      if (/not found|expired|ROOM_NOT_FOUND/i.test(err?.message || '')) {
+        setRoomNotFound(code.trim().toUpperCase());
+      }
+      // Other errors are handled by roomError
     } finally {
       setRoomLoading(false);
     }
   };
 
+  const handleOpenDemo = (track) => {
+    // M6: a trending card starts a fresh demo with THAT track. Opening the
+    // plain demo (no track) preserves the previous demo state (M9).
+    setDemoTrack(track || null);
+    if (track) setDemoState(null);
+    setRoomNotFound(null);
+    setDemoActive(true);
+  };
+
   const handleLeave = () => {
     setDemoActive(false);
+    setRoomNotFound(null);
+    clearError();
     if (window.location.pathname !== '/') {
       window.history.replaceState(null, '', '/');
     }
@@ -176,7 +317,13 @@ function DuetAppShell() {
   if (demoActive) {
     return (
       <Suspense fallback={<LoadingFallback />}>
-        <RoomView isDemo onLeave={handleLeave} />
+        <RoomView
+          isDemo
+          onLeave={handleLeave}
+          demoTrack={demoTrack}
+          demoState={demoState}
+          onDemoStateChange={setDemoState}
+        />
       </Suspense>
     );
   }
@@ -189,12 +336,23 @@ function DuetAppShell() {
     );
   }
 
+  if (roomNotFound) {
+    return (
+      <RoomNotFoundScreen
+        code={roomNotFound}
+        onCreateRoom={handleCreateRoom}
+        onJoinRoom={handleJoinRoom}
+        roomLoading={roomLoading}
+      />
+    );
+  }
+
   return (
     <Suspense fallback={<LoadingFallback />}>
       <LandingPage
         onCreateRoom={handleCreateRoom}
         onJoinRoom={handleJoinRoom}
-        onOpenDemo={() => setDemoActive(true)}
+        onOpenDemo={handleOpenDemo}
         lastRoomCode={lastRoomCode}
         roomLoading={roomLoading}
         roomError={spotifyCallbackError || roomError}

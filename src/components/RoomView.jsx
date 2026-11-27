@@ -25,14 +25,16 @@ import {
   SkipBack,
   SkipForward,
   Smartphone,
+  Loader2,
   Trash2,
   Volume2,
+  VolumeX,
   X,
 } from 'lucide-react';
 import { INITIAL_TRACKS, SEARCH_CATALOG, formatTime } from '../data/mockTracks';
 import { useRoom } from '../context/RoomContext';
 import { searchMusicBackend } from '../services/apiClient';
-import { searchRealSongs } from '../utils/artworkApi';
+import { resolveYouTubeTrack, searchRealSongs } from '../utils/artworkApi';
 import { getStoredSpotifyAuth } from '../utils/spotifyAuth';
 import AudioVisualizerCanvas from './AudioVisualizerCanvas';
 import SpotifyConnectModal from './SpotifyConnectModal';
@@ -57,7 +59,7 @@ const THEME_PILL_COLORS = {
 
 const REACTION_EMOJIS = ['❤️', '🔥', '🎵', '😊', '✨', '😭'];
 
-export default function RoomView({ isDemo = false, onLeave }) {
+export default function RoomView({ isDemo = false, onLeave, demoTrack = null, demoState = null, onDemoStateChange }) {
   const {
     roomState,
     session,
@@ -80,18 +82,58 @@ export default function RoomView({ isDemo = false, onLeave }) {
     leaveRoom,
     setPlayerError,
     setRoomError,
+    // Optional APIs exposed by the client-core round (volume/syncStatus/
+    // getCurrentPositionMs/clearRoomError). They may be undefined until that
+    // round lands — every use below falls back gracefully.
+    volume: ctxVolume,
+    muted: ctxMuted,
+    setVolume: ctxSetVolume,
+    toggleMute: ctxToggleMute,
+    syncStatus: ctxSyncStatus,
+    getCurrentPositionMs,
+    clearRoomError,
   } = useRoom();
 
   // ——— Demo Mode Fallback State (only used when isDemo === true) ———
-  const [demoRole, setDemoRole] = useState('host');
-  const [demoSource, setDemoSource] = useState('local');
-  const [demoPartnerSource, setDemoPartnerSource] = useState('youtube');
-  const [demoUnlocked, setDemoUnlocked] = useState(true);
-  const [demoQueue, setDemoQueue] = useState(INITIAL_TRACKS);
-  const [demoIdx, setDemoIdx] = useState(0);
-  const [demoPlaying, setDemoPlaying] = useState(true);
-  const [demoTime, setDemoTime] = useState(102);
-  const [demoTheme, setDemoTheme] = useState('midnight');
+  // M9: demo state is lifted to App.jsx (demoState) so leaving/re-entering
+  // the demo preserves pause state, track, queue and chat while the page is
+  // open. M6: a trending card passes demoTrack, which becomes the first track.
+  const [demoRole, setDemoRole] = useState(demoState?.role || 'host');
+  const [demoSource, setDemoSource] = useState(demoState?.source || 'local');
+  const [demoPartnerSource, setDemoPartnerSource] = useState(demoState?.partnerSource || 'youtube');
+  const [demoUnlocked, setDemoUnlocked] = useState(demoState?.unlocked ?? true);
+  const [demoQueue, setDemoQueue] = useState(
+    demoState?.queue ||
+      (demoTrack
+        ? [demoTrack, ...INITIAL_TRACKS.filter((t) => t.id !== demoTrack.id)]
+        : INITIAL_TRACKS)
+  );
+  const [demoIdx, setDemoIdx] = useState(demoState?.idx || 0);
+  const [demoPlaying, setDemoPlaying] = useState(demoState?.playing ?? true);
+  const [demoTime, setDemoTime] = useState(demoState?.time ?? (demoTrack ? 0 : 102));
+  const [demoTheme, setDemoTheme] = useState(demoState?.theme || 'midnight');
+  const [demoStartMs] = useState(() => demoState?.startedAtMs || Date.now());
+  const [demoChat, setDemoChat] = useState(demoState?.chat || []);
+  const [demoReactions, setDemoReactions] = useState(demoState?.reactions || []);
+
+  // Persist demo state back to App.jsx whenever it changes (M9).
+  useEffect(() => {
+    if (!isDemo || typeof onDemoStateChange !== 'function') return;
+    onDemoStateChange({
+      role: demoRole,
+      source: demoSource,
+      partnerSource: demoPartnerSource,
+      unlocked: demoUnlocked,
+      queue: demoQueue,
+      idx: demoIdx,
+      playing: demoPlaying,
+      time: demoTime,
+      theme: demoTheme,
+      startedAtMs: demoStartMs,
+      chat: demoChat,
+      reactions: demoReactions,
+    });
+  }, [isDemo, demoRole, demoSource, demoPartnerSource, demoUnlocked, demoQueue, demoIdx, demoPlaying, demoTime, demoTheme, demoStartMs, demoChat, demoReactions, onDemoStateChange]);
 
   useEffect(() => {
     if (!isDemo || !demoPlaying) return;
@@ -132,7 +174,49 @@ export default function RoomView({ isDemo = false, onLeave }) {
   const knownParticipantIdsRef = useRef(null);
   const knownPendingJoinIdsRef = useRef(new Set());
   const toastTimerRef = useRef(null);
+  const actionToastTimerRef = useRef(null);
+  const armTimerRef = useRef(null);
+  const seekTimerRef = useRef(null);
+  const scrubSecRef = useRef(null);
   const rightPanelRef = useRef(null);
+  const [toast, setToast] = useState(null);
+  // N-06: local scrub position while dragging, so the slider follows the
+  // drag immediately while the server seek is debounced (see handleSeek).
+  const [scrubSec, setScrubSec] = useState(null);
+  const [playLoading, setPlayLoading] = useState(false);
+  const [armedAction, setArmedAction] = useState(null); // N-24: 'end' | 'host'
+  // M3: volume falls back to local state until the context exposes it.
+  const [localVolume, setLocalVolume] = useState(0.8);
+  const [localMuted, setLocalMuted] = useState(false);
+  const volume = ctxVolume ?? localVolume;
+  const muted = ctxMuted ?? localMuted;
+
+  const showToast = (msg) => {
+    setToast(msg);
+    if (actionToastTimerRef.current) clearTimeout(actionToastTimerRef.current);
+    actionToastTimerRef.current = setTimeout(() => setToast(null), 2500);
+  };
+  const applyVolume = (v) => {
+    if (typeof ctxSetVolume === 'function') ctxSetVolume(v);
+    else setLocalVolume(v);
+    if (v > 0) setLocalMuted(false);
+  };
+  const applyToggleMute = () => {
+    if (typeof ctxToggleMute === 'function') ctxToggleMute();
+    else setLocalMuted((m) => !m);
+  };
+  // N-24: tap once to arm, tap again to confirm a destructive action.
+  const armOrRun = (action, run) => {
+    if (armedAction === action) {
+      if (armTimerRef.current) clearTimeout(armTimerRef.current);
+      setArmedAction(null);
+      run();
+      return;
+    }
+    setArmedAction(action);
+    if (armTimerRef.current) clearTimeout(armTimerRef.current);
+    armTimerRef.current = setTimeout(() => setArmedAction(null), 4000);
+  };
 
   const ytContainerRef = useRef(null);
 
@@ -157,6 +241,11 @@ export default function RoomView({ isDemo = false, onLeave }) {
   const currentSec = isDemo
     ? demoTime
     : Math.round((syncMetrics.reportedPositionMs || 0) / 1000);
+  // N-06: while scrubbing, show the dragged position instead of the
+  // server-reported one so the slider does not snap back mid-drag.
+  const displaySec = scrubSec ?? currentSec;
+  // M4: the room theme comes from roomState.settings.theme (server truth),
+  // so it survives a refresh instead of reverting to the dark default.
   const theme = isDemo ? demoTheme : roomState?.settings?.theme || 'midnight';
 
   // Initialize real player adapter when source or room changes
@@ -312,6 +401,7 @@ export default function RoomView({ isDemo = false, onLeave }) {
   const handleCopyCode = () => {
     navigator.clipboard?.writeText(roomCode).catch(() => {});
     setCopied(true);
+    showToast('Room code copied');
     setTimeout(() => setCopied(false), 1800);
   };
 
@@ -352,12 +442,59 @@ export default function RoomView({ isDemo = false, onLeave }) {
       setDemoPlaying((p) => !p);
       return;
     }
-    if (isPlaying) {
-      await sendCommand('player:pause', { positionMs: currentSec * 1000 });
-    } else {
-      await sendCommand('player:play', { positionMs: currentSec * 1000, scheduleLeadMs: 250 });
+    // N-25: anchor on the live player position, not the ~1s-stale reported one.
+    setPlayLoading(true);
+    try {
+      let posMs = syncMetrics.expectedPositionMs ?? currentSec * 1000;
+      if (typeof getCurrentPositionMs === 'function') {
+        try {
+          const live = await getCurrentPositionMs();
+          if (typeof live === 'number') posMs = live;
+        } catch {
+          // Fall back to the expected position above.
+        }
+      }
+      if (isPlaying) {
+        await sendCommand('player:pause', { positionMs: Math.round(posMs) });
+      } else {
+        await sendCommand('player:play', { positionMs: Math.round(posMs), scheduleLeadMs: 250 });
+      }
+    } finally {
+      setPlayLoading(false);
     }
   };
+
+  // m2: Resync with a brief confirmation.
+  const handleResync = async () => {
+    if (isDemo) {
+      setDemoTime(currentSec);
+    } else {
+      await runClockSync();
+    }
+    showToast('Resynced — clocks re-measured');
+  };
+
+  // m2: Remove from queue with a brief confirmation.
+  const handleRemoveTrack = async (queueItemId) => {
+    await sendCommand('queue:remove', { queueItemId });
+    showToast('Removed from queue');
+  };
+
+  // N-06: scrubber drag is debounced — the slider follows the drag
+  // immediately (scrubSec), but player:seek is only sent 250ms after the
+  // last movement (or immediately on release), so a drag does not spam
+  // the server with a seek per input event.
+  const flushSeek = useCallback(async () => {
+    if (seekTimerRef.current) {
+      clearTimeout(seekTimerRef.current);
+      seekTimerRef.current = null;
+    }
+    const sec = scrubSecRef.current;
+    if (sec == null) return;
+    scrubSecRef.current = null;
+    setScrubSec(null);
+    await sendCommand('player:seek', { positionMs: sec * 1000 });
+  }, [sendCommand]);
 
   const handleSeek = async (e) => {
     if (!canControl) return;
@@ -366,8 +503,24 @@ export default function RoomView({ isDemo = false, onLeave }) {
       setDemoTime(sec);
       return;
     }
-    await sendCommand('player:seek', { positionMs: sec * 1000 });
+    // Show the dragged position at once; send the seek once the user
+    // stops moving the scrubber for 250ms.
+    scrubSecRef.current = sec;
+    setScrubSec(sec);
+    if (seekTimerRef.current) clearTimeout(seekTimerRef.current);
+    seekTimerRef.current = setTimeout(() => {
+      seekTimerRef.current = null;
+      flushSeek();
+    }, 250);
   };
+
+  // Clear any pending debounced seek when the room view unmounts.
+  useEffect(
+    () => () => {
+      if (seekTimerRef.current) clearTimeout(seekTimerRef.current);
+    },
+    []
+  );
 
   const handleStep = async (dir) => {
     if (!canControl) return;
@@ -385,15 +538,30 @@ export default function RoomView({ isDemo = false, onLeave }) {
       dedication: dedication.trim() || undefined,
     };
     if (isDemo) {
+      // Demo playback is simulated, so no YouTube resolution is needed.
       setDemoQueue((prev) => [...prev, trackPayload]);
       setDedication('');
       setActiveTab('queue');
       return;
     }
+    // N-01: never add a track with no verified YouTube ID. Resolve it first;
+    // if no playable version exists, say so and do NOT add the broken track.
+    if (!trackPayload.youtubeId) {
+      setSearchError('');
+      const resolved = await resolveYouTubeTrack(trackPayload.title, trackPayload.artist);
+      if (resolved?.item?.youtubeId) {
+        trackPayload.youtubeId = resolved.item.youtubeId;
+        if (resolved.item.durationSec) trackPayload.durationSec = resolved.item.durationSec;
+      } else {
+        setSearchError('No playable YouTube version found — paste a YouTube link instead');
+        return;
+      }
+    }
     const res = await sendCommand('queue:add', { track: trackPayload });
     if (res?.ok) {
       setDedication('');
       setActiveTab('queue');
+      showToast('Added to queue');
     }
   };
 
@@ -411,7 +579,22 @@ export default function RoomView({ isDemo = false, onLeave }) {
   const handleSendChat = async (e) => {
     e.preventDefault();
     const txt = chatText.trim();
-    if (!txt || isDemo) return;
+    if (!txt) return;
+    if (isDemo) {
+      // M9: demo chat is local-only, like a real room's chat.
+      setDemoChat((prev) => [
+        ...prev,
+        {
+          id: `demo-msg-${Date.now()}`,
+          senderId: 'demo-self',
+          senderName: isHost ? 'Host' : 'Guest',
+          text: txt,
+          createdAtMs: Date.now(),
+        },
+      ]);
+      setChatText('');
+      return;
+    }
     setChatText('');
     await sendCommand('chat:send', { text: txt });
   };
@@ -425,18 +608,31 @@ export default function RoomView({ isDemo = false, onLeave }) {
     await sendCommand('queue:clear', {});
   };
 
-  // Session duration
-  const sessionStartMs = isDemo ? Date.now() - 300000 : roomState?.createdAtMs;
+  // Session duration — m7: real elapsed time (demo uses its actual start,
+  // real rooms use the server-created timestamp). Never hardcoded.
+  const sessionStartMs = isDemo ? demoStartMs : roomState?.createdAtMs;
   const sessionDurationSec = sessionStartMs ? Math.max(0, Math.floor((Date.now() - sessionStartMs) / 1000)) : 0;
   const sessionDurationStr = `${Math.floor(sessionDurationSec / 60)}m ${sessionDurationSec % 60}s`;
   const tracksPlayedCount = isDemo ? demoIdx + 1 : roomState?.stats?.tracksPlayed || 0;
 
   const handleSendReaction = async (emoji) => {
-    if (isDemo) return;
+    if (isDemo) {
+      // M9: demo reactions are local-only.
+      const reaction = {
+        id: `demo-reaction-${Date.now()}`,
+        emoji,
+        senderName: isHost ? 'Host' : 'Guest',
+      };
+      setDemoReactions((prev) => [...prev, reaction].slice(-5));
+      setTimeout(() => {
+        setDemoReactions((prev) => prev.filter((r) => r.id !== reaction.id));
+      }, 4000);
+      return;
+    }
     await sendCommand('reaction:send', { emoji });
   };
 
-  const progressPct = Math.min(100, (currentSec / Math.max(1, durationSec)) * 100);
+  const progressPct = Math.min(100, (displaySec / Math.max(1, durationSec)) * 100);
 
   return (
     <div className={`relative min-h-screen overflow-x-hidden text-white transition-colors duration-700 ${(THEME_STYLES[theme] || THEME_STYLES.midnight).bg}`}>
@@ -615,9 +811,16 @@ export default function RoomView({ isDemo = false, onLeave }) {
         </div>
       )}
 
+      {/* m1/m2: confirmation toast (copy code, resync, remove, add) */}
+      {toast && (
+        <div className="fixed bottom-6 left-1/2 z-[70] -translate-x-1/2 rounded-full border border-white/10 bg-zinc-900/95 px-4 py-2 text-xs font-semibold text-white shadow-2xl backdrop-blur-md">
+          {toast}
+        </div>
+      )}
+
       {/* Floating Live Reactions */}
       <div className="pointer-events-none fixed right-6 bottom-24 z-50 flex flex-col items-end gap-2">
-        {reactions.map((r) => (
+        {(isDemo ? demoReactions : reactions).map((r) => (
           <div
             key={r.id}
             className="animate-fade-up flex items-center gap-2 rounded-full border border-white/10 bg-zinc-900/90 px-3.5 py-1.5 text-sm shadow-xl backdrop-blur-md"
@@ -713,8 +916,16 @@ export default function RoomView({ isDemo = false, onLeave }) {
                 <span className="animate-pulse-ring absolute inline-flex h-full w-full rounded-full bg-emerald-400" />
                 <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-500" />
               </span>
-              <span className="hidden sm:inline">{isDemo ? 'Simulated' : roomState?.lifecycleState || connectionStatus}</span>
-              {!isDemo && <span className="text-emerald-400/80">{syncMetrics.rttMs}ms</span>}
+              <span className="hidden sm:inline">
+                {isDemo
+                  ? 'Simulated'
+                  : ctxSyncStatus
+                    ? { waiting: 'Waiting for partner', buffering: 'Buffering', 'in-sync': 'In sync', paused: 'Paused', syncing: 'Syncing' }[ctxSyncStatus] || ctxSyncStatus
+                    : !partnerParticipant
+                      ? 'Waiting for partner'
+                      : roomState?.lifecycleState || connectionStatus}
+              </span>
+              {!isDemo && partnerParticipant && <span className="text-emerald-400/80">{syncMetrics.rttMs}ms</span>}
             </button>
 
             {!isDemo && (
@@ -802,12 +1013,6 @@ export default function RoomView({ isDemo = false, onLeave }) {
                         ))}
                       </div>
                     )}
-                    <button
-                      onClick={openChatFromNotification}
-                      className="mt-1 w-full rounded-xl bg-white/5 py-2 text-xs font-semibold text-violet-300 transition hover:bg-white/10 cursor-pointer"
-                    >
-                      Open Chat
-                    </button>
                   </div>
                 )}
 
@@ -931,21 +1136,29 @@ export default function RoomView({ isDemo = false, onLeave }) {
                 {isHost && partnerParticipant && (
                   <button
                     onClick={() =>
-                      sendCommand('room:transfer-host', {
-                        targetParticipantId: partnerParticipant.id,
-                      })
+                      armOrRun('host', () =>
+                        sendCommand('room:transfer-host', {
+                          targetParticipantId: partnerParticipant.id,
+                        })
+                      )
                     }
-                    className="rounded-full border border-white/10 bg-white/5 px-2.5 py-0.5 text-[11px] font-semibold text-zinc-400 hover:bg-white/10 hover:text-white cursor-pointer transition"
+                    className={`rounded-full border px-2.5 py-0.5 text-[11px] font-semibold cursor-pointer transition ${
+                      armedAction === 'host'
+                        ? 'border-amber-500/50 bg-amber-500/20 text-amber-200'
+                        : 'border-white/10 bg-white/5 text-zinc-400 hover:bg-white/10 hover:text-white'
+                    }`}
                   >
-                    Make {partnerParticipant.name} Host
+                    {armedAction === 'host' ? 'Tap again to make host' : `Make ${partnerParticipant.name} Host`}
                   </button>
                 )}
                 {isHost && (
                   <button
-                    onClick={() => sendCommand('room:close', {})}
-                    className="rounded-full bg-emerald-600 px-3 py-1 text-[11px] font-bold text-white hover:bg-emerald-700 cursor-pointer transition"
+                    onClick={() => armOrRun('end', () => sendCommand('room:close', {}))}
+                    className={`rounded-full px-3 py-1 text-[11px] font-bold text-white cursor-pointer transition ${
+                      armedAction === 'end' ? 'bg-rose-600 hover:bg-rose-700' : 'bg-emerald-600 hover:bg-emerald-700'
+                    }`}
                   >
-                    End Room
+                    {armedAction === 'end' ? 'Tap again to end room' : 'End Room'}
                   </button>
                 )}
               </div>
@@ -962,10 +1175,23 @@ export default function RoomView({ isDemo = false, onLeave }) {
             <div className="flex items-center gap-2">
               {playerError?.isEmbedBlocked && currentTrack && (
                 <button
-                  onClick={() => {
-                    setActiveTab('search');
-                    setSearchQuery(`${currentTrack.title} ${currentTrack.artist}`);
+                  onClick={async () => {
                     setPlayerError(null);
+                    const resolved = await resolveYouTubeTrack(currentTrack.title, currentTrack.artist);
+                    if (resolved?.item?.youtubeId) {
+                      const res = await sendCommand('queue:add', {
+                        track: {
+                          ...currentTrack,
+                          youtubeId: resolved.item.youtubeId,
+                          durationSec: resolved.item.durationSec || currentTrack.durationSec,
+                        },
+                      });
+                      if (res?.ok) showToast('Found a playable version — added to queue');
+                    } else {
+                      setActiveTab('search');
+                      setSearchQuery(`${currentTrack.title} ${currentTrack.artist}`);
+                      setSearchError('No playable YouTube version found — paste a YouTube link instead');
+                    }
                   }}
                   className="rounded-full bg-white/15 px-3 py-1 font-semibold text-white hover:bg-white/25 cursor-pointer"
                 >
@@ -1055,13 +1281,14 @@ export default function RoomView({ isDemo = false, onLeave }) {
                 <div className="relative mt-6 space-y-5">
                   {!isDemo && (mySource === 'youtube' || mySource === 'audio') && (
                     <div
+                      aria-label={mySource === 'audio' ? `Audio Only — ${currentTrack.title} by ${currentTrack.artist}` : undefined}
                       className={
                         mySource === 'youtube'
                           ? 'overflow-hidden rounded-2xl border border-white/10 bg-black'
-                          : 'mx-auto w-full max-w-[360px] overflow-hidden rounded-2xl border border-white/10 bg-black'
+                          : 'pointer-events-none mx-auto min-h-[200px] w-full max-w-[360px] overflow-hidden rounded-2xl border border-white/10 bg-black'
                       }
                     >
-                      <div ref={ytContainerRef} className="aspect-video w-full" />
+                      <div ref={ytContainerRef} className="aspect-video min-h-[200px] w-full" />
                     </div>
                   )}
 
@@ -1091,7 +1318,7 @@ export default function RoomView({ isDemo = false, onLeave }) {
                           <Volume2 className="h-3 w-3" />{' '}
                           {mySource === 'spotify' ? 'Spotify Premium · Synced' : 'Audio Only · Background Play'}
                         </span>
-                        <h2 className="font-display text-2xl font-bold tracking-tight text-white sm:text-3xl">
+                        <h2 className="font-display text-2xl font-bold tracking-tight break-words text-white sm:text-3xl">
                           {currentTrack.title}
                         </h2>
                         <p className="mt-1 text-base font-medium text-zinc-400">{currentTrack.artist}</p>
@@ -1107,7 +1334,7 @@ export default function RoomView({ isDemo = false, onLeave }) {
                   {!isDemo && mySource === 'youtube' && (
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>
-                        <h2 className="font-display text-xl font-bold text-white">{currentTrack.title}</h2>
+                        <h2 className="font-display text-xl font-bold break-words text-white">{currentTrack.title}</h2>
                         <p className="text-sm text-zinc-400">{currentTrack.artist}</p>
                       </div>
                       {currentTrack.dedication && (
@@ -1127,9 +1354,12 @@ export default function RoomView({ isDemo = false, onLeave }) {
                     type="range"
                     min={0}
                     max={durationSec}
-                    value={currentSec}
+                    value={displaySec}
                     disabled={!canControl}
                     onChange={handleSeek}
+                    onPointerUp={() => flushSeek()}
+                    onMouseUp={() => flushSeek()}
+                    onTouchEnd={() => flushSeek()}
                     aria-label="Track progress"
                     className={`h-1.5 w-full appearance-none rounded-full accent-white ${
                       canControl ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'
@@ -1139,7 +1369,7 @@ export default function RoomView({ isDemo = false, onLeave }) {
                     }}
                   />
                   <div className="mt-2 flex justify-between font-mono text-xs font-medium text-zinc-500">
-                    <span>{formatTime(currentSec)}</span>
+                    <span>{formatTime(displaySec)}</span>
                     <span>{formatTime(durationSec)}</span>
                   </div>
                 </div>
@@ -1159,8 +1389,8 @@ export default function RoomView({ isDemo = false, onLeave }) {
                   <button onClick={() => handleStep(-1)} disabled={!canControl} aria-label="Previous" className="flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-white/5 text-zinc-300 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer">
                     <SkipBack className="h-4 w-4" />
                   </button>
-                  <button onClick={handlePlayPause} disabled={!canControl} aria-label={isPlaying ? 'Pause' : 'Play'} className="flex h-14 w-14 items-center justify-center rounded-full bg-white text-zinc-950 shadow-lg shadow-white/20 transition-all hover:bg-zinc-200 hover:shadow-white/30 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer">
-                    {isPlaying ? <Pause className="h-5 w-5 fill-current" /> : <Play className="h-5 w-5 translate-x-0.5 fill-current" />}
+                  <button onClick={handlePlayPause} disabled={!canControl || playLoading} aria-label={playLoading ? 'Loading…' : isPlaying ? 'Pause' : 'Play'} className="flex h-14 w-14 items-center justify-center rounded-full bg-white text-zinc-950 shadow-lg shadow-white/20 transition-all hover:bg-zinc-200 hover:shadow-white/30 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer">
+                    {playLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : isPlaying ? <Pause className="h-5 w-5 fill-current" /> : <Play className="h-5 w-5 translate-x-0.5 fill-current" />}
                   </button>
                   <button onClick={() => handleStep(1)} disabled={!canControl} aria-label="Next" className="flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-white/5 text-zinc-300 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer">
                     <SkipForward className="h-4 w-4" />
@@ -1168,7 +1398,7 @@ export default function RoomView({ isDemo = false, onLeave }) {
                 </div>
                 <div className="flex justify-end">
                   <button
-                    onClick={() => (isDemo ? setDemoTime(currentSec) : runClockSync())}
+                    onClick={handleResync}
                     className="inline-flex items-center gap-1.5 text-xs font-semibold text-zinc-500 hover:text-white cursor-pointer"
                   >
                     <RefreshCw className="h-3.5 w-3.5" /> Resync
@@ -1176,8 +1406,33 @@ export default function RoomView({ isDemo = false, onLeave }) {
                 </div>
               </div>
 
+              {/* M3: Duet volume control (works for host and guest) + m3 loading note */}
+              <div className="mt-4 flex items-center gap-3">
+                <button
+                  onClick={applyToggleMute}
+                  aria-label={muted ? 'Unmute' : 'Mute'}
+                  title={muted ? 'Unmute' : 'Mute'}
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/5 text-zinc-300 transition hover:bg-white/10 cursor-pointer"
+                >
+                  {muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+                </button>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  value={Math.round((muted ? 0 : volume) * 100)}
+                  onChange={(e) => applyVolume(Number(e.target.value) / 100)}
+                  aria-label="Volume"
+                  className="h-1.5 flex-1 cursor-pointer appearance-none rounded-full accent-white"
+                />
+                <span className="w-10 text-right font-mono text-xs font-semibold text-zinc-400">
+                  {Math.round((muted ? 0 : volume) * 100)}%
+                </span>
+                {playLoading && <span className="text-xs font-semibold text-zinc-400">Loading…</span>}
+              </div>
+
               {/* Live Reaction Bar */}
-              {!isDemo && (
+              {(
                 <div className="mt-5 flex flex-wrap items-center justify-center gap-1.5 border-t border-white/5 pt-4 sm:mt-6 sm:gap-2">
                   {REACTION_EMOJIS.map((emoji) => (
                     <button
@@ -1276,8 +1531,7 @@ export default function RoomView({ isDemo = false, onLeave }) {
                   >
                     <Search className="h-3.5 w-3.5" /> Add
                   </button>
-                  {!isDemo && (
-                    <button
+                  <button
                       onClick={() => setActiveTab('chat')}
                       className={`inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-semibold transition cursor-pointer ${
                         activeTab === 'chat' ? 'bg-white text-zinc-950' : 'text-zinc-400 hover:text-white'
@@ -1290,7 +1544,6 @@ export default function RoomView({ isDemo = false, onLeave }) {
                         </span>
                       )}
                     </button>
-                  )}
                 </div>
               </div>
 
@@ -1303,12 +1556,13 @@ export default function RoomView({ isDemo = false, onLeave }) {
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
                       placeholder="Search songs or paste YouTube URL..."
+                      aria-label="Search songs or paste a YouTube link"
                       className="w-full rounded-2xl border border-white/10 bg-white/5 py-2.5 pr-4 pl-10 text-sm text-white placeholder:text-zinc-600 focus:border-white/20 focus:outline-none"
                     />
                   </div>
                   {!isDemo && !youtubeApiConfigured && (
                     <p className="text-[11px] text-amber-300/90">
-                      YouTube Data API key not set in <code>server/.env</code> — paste any YouTube URL directly or add <code>YOUTUBE_API_KEY</code> for keyword search.
+                      Keyword search needs the YouTube API — paste any YouTube link to add a song.
                     </p>
                   )}
                   <input
@@ -1317,6 +1571,7 @@ export default function RoomView({ isDemo = false, onLeave }) {
                     value={dedication}
                     onChange={(e) => setDedication(e.target.value)}
                     placeholder='Optional dedication (e.g. "Reminds me of you")'
+                    aria-label="Dedication for this song (optional)"
                     className="w-full rounded-xl border border-white/5 bg-white/[0.03] px-3.5 py-2 text-xs text-white placeholder:text-zinc-600 focus:border-white/15 focus:outline-none"
                   />
                   {isSearching && <p className="text-xs text-zinc-500">Searching...</p>}
@@ -1405,14 +1660,14 @@ export default function RoomView({ isDemo = false, onLeave }) {
                         </div>
 
                         {canControl && !isDemo && (
-                          <div className="flex items-center gap-1 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100">
+                          <div className="flex items-center gap-1 opacity-100 transition-opacity focus-within:opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-within:opacity-100">
                             {idx > 0 && (
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   sendCommand('queue:reorder', { fromIndex: idx, toIndex: idx - 1 });
                                 }}
-                                className={`rounded-full p-1 cursor-pointer ${isCurr ? 'text-zinc-600 hover:bg-zinc-200' : 'text-zinc-400 hover:bg-white/10'}`}
+                                className={`rounded-full p-1 cursor-pointer focus-visible:opacity-100 ${isCurr ? 'text-zinc-600 hover:bg-zinc-200' : 'text-zinc-400 hover:bg-white/10'}`}
                                 aria-label="Move up"
                               >
                                 <ArrowUp className="h-3.5 w-3.5" />
@@ -1424,7 +1679,7 @@ export default function RoomView({ isDemo = false, onLeave }) {
                                   e.stopPropagation();
                                   sendCommand('queue:reorder', { fromIndex: idx, toIndex: idx + 1 });
                                 }}
-                                className={`rounded-full p-1 cursor-pointer ${isCurr ? 'text-zinc-600 hover:bg-zinc-200' : 'text-zinc-400 hover:bg-white/10'}`}
+                                className={`rounded-full p-1 cursor-pointer focus-visible:opacity-100 ${isCurr ? 'text-zinc-600 hover:bg-zinc-200' : 'text-zinc-400 hover:bg-white/10'}`}
                                 aria-label="Move down"
                               >
                                 <ArrowDown className="h-3.5 w-3.5" />
@@ -1433,9 +1688,9 @@ export default function RoomView({ isDemo = false, onLeave }) {
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
-                                sendCommand('queue:remove', { queueItemId: item.queueItemId });
+                                handleRemoveTrack(item.queueItemId);
                               }}
-                              className={`rounded-full p-1 cursor-pointer ${isCurr ? 'text-zinc-600 hover:bg-zinc-200' : 'text-zinc-400 hover:bg-white/10'}`}
+                              className={`rounded-full p-1 cursor-pointer focus-visible:opacity-100 ${isCurr ? 'text-zinc-600 hover:bg-zinc-200' : 'text-zinc-400 hover:bg-white/10'}`}
                               aria-label="Remove track"
                             >
                               <Trash2 className="h-3.5 w-3.5" />
@@ -1448,19 +1703,27 @@ export default function RoomView({ isDemo = false, onLeave }) {
                 </div>
               )}
 
-              {activeTab === 'chat' && !isDemo && (
+              {activeTab === 'chat' && (
                 <div className="mt-4 flex flex-col">
                   <div className="h-72 space-y-2.5 overflow-y-auto pr-1 sm:h-[390px]">
-                    {(roomState?.chat || []).length === 0 && (
+                    {(isDemo ? demoChat : roomState?.chat || []).length === 0 && (
                       <p className="py-12 text-center text-xs text-zinc-500">
-                        Private room chat — messages clear when the room closes.
+                        {isDemo
+                          ? 'Demo chat — messages are local-only in the demo.'
+                          : 'Private room chat — messages clear when the room closes.'}
                       </p>
                     )}
-                    {(roomState?.chat || []).map((msg) => {
-                      const mine = msg.senderId === session?.participantId;
+                    {(isDemo ? demoChat : roomState?.chat || []).map((msg) => {
+                      const mine = isDemo
+                        ? msg.senderId === 'demo-self'
+                        : msg.senderId === session?.participantId;
+                      const msgTime = msg.createdAtMs || msg.timestamp || msg.createdAt;
                       return (
                         <div key={msg.id} className={`flex flex-col ${mine ? 'items-end' : 'items-start'}`}>
-                          <span className="mb-1 text-[10px] font-semibold text-zinc-500">{msg.senderName}</span>
+                          <span className="mb-1 text-[10px] font-semibold text-zinc-500">
+                            {msg.senderName}
+                            {msgTime ? ` • ${new Date(msgTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}
+                          </span>
                           <div
                             className={`max-w-[85%] rounded-2xl px-3.5 py-2 text-xs leading-relaxed ${
                               mine ? 'bg-violet-600 text-white' : 'bg-white/10 text-zinc-100'
@@ -1491,6 +1754,7 @@ export default function RoomView({ isDemo = false, onLeave }) {
                       value={chatText}
                       onChange={handleChatInputChange}
                       placeholder="Message your partner..."
+                      aria-label="Chat message"
                       className="flex-1 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs text-white placeholder:text-zinc-500 focus:border-white/20 focus:outline-none"
                     />
                     <button

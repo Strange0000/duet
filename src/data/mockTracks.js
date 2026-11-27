@@ -11,7 +11,6 @@ export const INITIAL_TRACKS = [
     secondaryColor: '#f97316',
     youtubeId: 'dX3k_QDnzHE',
     spotifyUri: 'spotify:track:1eyzqe2QqGZUmfcPZtrIyt',
-    ytOffsetMs: 0,
   },
   {
     id: 'trk-2',
@@ -25,7 +24,6 @@ export const INITIAL_TRACKS = [
     secondaryColor: '#06b6d4',
     youtubeId: 'a5uQMwRMHcs',
     spotifyUri: 'spotify:track:2cGxRwrMyEAp8dEbuZaVv6',
-    ytOffsetMs: 500,
   },
   {
     id: 'trk-3',
@@ -33,13 +31,12 @@ export const INITIAL_TRACKS = [
     artist: 'Tame Impala',
     album: 'Currents',
     durationSec: 216,
-    coverImage: '/cover-midnight.jpg',
+    coverImage: '/cover-indie.jpg',
     coverGradient: 'from-rose-500 via-purple-600 to-indigo-700',
     accentColor: '#e11d48',
     secondaryColor: '#7c3aed',
     youtubeId: 'sBzrzS1Ag_g',
     spotifyUri: 'spotify:track:6K4t31amVTZDgR3sKmwUJJ',
-    ytOffsetMs: 0,
   },
   {
     id: 'trk-4',
@@ -47,13 +44,12 @@ export const INITIAL_TRACKS = [
     artist: 'The Weeknd ft. Daft Punk',
     album: 'Starboy',
     durationSec: 230,
-    coverImage: '/cover-resonance.jpg',
+    coverImage: '/cover-synth.jpg',
     coverGradient: 'from-red-600 via-rose-600 to-amber-500',
     accentColor: '#dc2626',
     secondaryColor: '#f59e0b',
     youtubeId: '34Na4j8AVgA',
     spotifyUri: 'spotify:track:7MXVkk9YMctZqd1Srtv4MB',
-    ytOffsetMs: -500,
   },
   {
     id: 'trk-5',
@@ -67,7 +63,6 @@ export const INITIAL_TRACKS = [
     secondaryColor: '#ec4899',
     youtubeId: '8GW6sLrK40k',
     spotifyUri: 'spotify:track:1TuopWDIuDi1553081zvuU',
-    ytOffsetMs: 0,
   },
 ];
 
@@ -83,7 +78,6 @@ export const SEARCH_CATALOG = [
     accentColor: '#6d28d9',
     youtubeId: 'sVx1mJDeUjY',
     spotifyUri: 'spotify:track:2LKOHdMsL0K9KwcPRlJK2v',
-    ytOffsetMs: 0,
   },
   {
     id: 'trk-7',
@@ -95,7 +89,6 @@ export const SEARCH_CATALOG = [
     accentColor: '#0284c7',
     youtubeId: 'Kp7eSUU9oy8',
     spotifyUri: 'spotify:track:0wXuerDYiBnERgIpbb3JBR',
-    ytOffsetMs: 0,
   },
   {
     id: 'trk-8',
@@ -107,7 +100,6 @@ export const SEARCH_CATALOG = [
     accentColor: '#0d9488',
     youtubeId: 'mrZRURcb1cM',
     spotifyUri: 'spotify:track:0ofHAoxe9vBkTCp2UQIavz',
-    ytOffsetMs: 0,
   },
 ];
 
@@ -118,11 +110,3 @@ export function formatTime(seconds) {
   return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
 }
 
-export function generateRoomCode() {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  let code = '';
-  for (let i = 0; i < 6; i++) {
-    code += chars[Math.floor(Math.random() * chars.length)];
-  }
-  return code;
-}

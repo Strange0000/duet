@@ -144,6 +144,188 @@ describe('RoomStore unit tests', () => {
     expect(guestSettings.room.settings.theme).toBe('aurora');
   });
 
+  it('starts stats.tracksPlayed at 0 (N-32) — nothing has played yet', () => {
+    const res = store.createRoom({ name: 'Host', initialTracks: [sampleTrack] });
+    expect(res.room.stats.tracksPlayed).toBe(0);
+  });
+
+  it('tolerates an unknown track duration instead of clamping to 210s (N-02)', () => {
+    const unknownTrack = { ...sampleTrack, durationSec: null };
+    const host = store.createRoom({ name: 'Host', initialTracks: [unknownTrack] });
+    expect(host.room.playback.durationMs).toBe(0);
+    // Seeking/playing past 3:30 must not be dragged back when duration is unknown.
+    const seeked = store.seek(host.room.code, host.participantId, { positionMs: 300000 });
+    expect(seeked.room.playback.anchorPositionMs).toBe(300000);
+    const played = store.play(host.room.code, host.participantId, { positionMs: 240000 });
+    expect(played.room.playback.anchorPositionMs).toBe(240000);
+  });
+
+  it('correctTrackDuration accepts a valid duration and rejects bad versions/ranges (N-02, B2)', () => {
+    const host = store.createRoom({ name: 'Host', initialTracks: [sampleTrack, secondTrack] });
+    const tv = host.room.playback.trackVersion;
+
+    const ok = store.correctTrackDuration(host.room.code, host.participantId, {
+      durationMs: 274000,
+      trackVersion: tv,
+    });
+    expect(ok.error).toBeUndefined();
+    expect(ok.room.playback.durationMs).toBe(274000);
+    expect(ok.room.queue[0].track.durationSec).toBe(274);
+
+    const wrongVersion = store.correctTrackDuration(host.room.code, host.participantId, {
+      durationMs: 200000,
+      trackVersion: tv + 5,
+    });
+    expect(wrongVersion.code).toBe('VERSION_MISMATCH');
+    expect(host.room.playback.durationMs).toBe(274000);
+
+    const tooShort = store.correctTrackDuration(host.room.code, host.participantId, {
+      durationMs: 5000,
+      trackVersion: tv,
+    });
+    expect(tooShort.code).toBe('INVALID_DURATION');
+
+    const tooLong = store.correctTrackDuration(host.room.code, host.participantId, {
+      durationMs: 50000000,
+      trackVersion: tv,
+    });
+    expect(tooLong.code).toBe('INVALID_DURATION');
+    expect(host.room.playback.durationMs).toBe(274000);
+  });
+
+  it('advances exactly once per track end, and a stale endedTrackVersion does not advance (B2)', () => {
+    const host = store.createRoom({ name: 'Host', initialTracks: [sampleTrack, secondTrack] });
+    const guest = store.joinRoom({ roomCode: host.room.code, name: 'Guest' });
+    store.play(host.room.code, host.participantId, {});
+
+    const tv1 = host.room.playback.trackVersion;
+    const r1 = store.updatePlayerStatus(host.room.code, host.participantId, { endedTrackVersion: tv1 });
+    expect(r1.autoAdvanced).toBe(true);
+    expect(host.room.playback.trackId).toBe('trk-2');
+
+    // Same (now stale) version reported again — must not advance a second time.
+    const tv2 = host.room.playback.trackVersion;
+    expect(tv2).not.toBe(tv1);
+    const stale = store.updatePlayerStatus(host.room.code, guest.participantId, { endedTrackVersion: tv1 });
+    expect(stale.autoAdvanced).toBe(false);
+    expect(host.room.playback.trackId).toBe('trk-2');
+
+    // The new version ending advances again (wraps to the first track).
+    const r2 = store.updatePlayerStatus(host.room.code, guest.participantId, { endedTrackVersion: tv2 });
+    expect(r2.autoAdvanced).toBe(true);
+    expect(host.room.playback.trackId).toBe('trk-1');
+  });
+
+  it('rejoins idempotently by sessionToken instead of returning ROOM_FULL (M4, B2)', () => {
+    const host = store.createRoom({ name: 'Host', initialTracks: [sampleTrack] });
+    const guest = store.joinRoom({ roomCode: host.room.code, name: 'Guest' });
+
+    // Room is full, but the same guest token reuses the existing slot.
+    const rejoined = store.joinRoom({
+      roomCode: host.room.code,
+      name: 'Guest',
+      sessionToken: guest.sessionToken,
+    });
+    expect(rejoined.error).toBeUndefined();
+    expect(rejoined.rejoined).toBe(true);
+    expect(rejoined.participantId).toBe(guest.participantId);
+    expect(rejoined.sessionToken).toBe(guest.sessionToken);
+    expect(store.serializeRoom(rejoined.room).participants).toHaveLength(2);
+
+    // A different guest still hits ROOM_FULL.
+    const third = store.joinRoom({ roomCode: host.room.code, name: 'Third' });
+    expect(third.code).toBe('ROOM_FULL');
+
+    // A token for another room does not rejoin here.
+    const other = store.createRoom({ name: 'Other' });
+    const cross = store.joinRoom({
+      roomCode: host.room.code,
+      name: 'Guest',
+      sessionToken: other.sessionToken,
+    });
+    expect(cross.code).toBe('ROOM_FULL');
+  });
+
+  it('exposes getPendingJoin/cancelJoinRequest so a dropped guest leaves no ghost (N-05, B2)', () => {
+    const host = store.createRoom({ name: 'Host', initialTracks: [sampleTrack] });
+    store.updateSettings(host.room.code, host.participantId, { requireApproval: true });
+
+    const req = store.requestJoin({ roomCode: host.room.code, name: 'Guest', socketId: 'sock-1' });
+    expect(store.getPendingJoin(host.room.code, req.request.id)).toMatchObject({ name: 'Guest' });
+    expect(store.getPendingJoin(host.room.code, 'nope')).toBeNull();
+
+    const cancelled = store.cancelJoinRequest(host.room.code, req.request.id);
+    expect(cancelled.request.id).toBe(req.request.id);
+    expect(store.getPendingJoin(host.room.code, req.request.id)).toBeNull();
+    expect(store.serializeRoom(cancelled.room).pendingJoins).toHaveLength(0);
+
+    // Approving the cancelled request now fails instead of creating a participant.
+    const res = store.respondToJoin(host.room.code, host.participantId, {
+      requestId: req.request.id,
+      approve: true,
+    });
+    expect(res.code).toBe('NOT_FOUND');
+    expect(store.serializeRoom(host.room).participants).toHaveLength(1);
+  });
+
+  it('dedupes pending joins by (name + source) as well as socketId (N-29)', () => {
+    const host = store.createRoom({ name: 'Host', initialTracks: [sampleTrack] });
+    store.updateSettings(host.room.code, host.participantId, { requireApproval: true });
+
+    const req1 = store.requestJoin({ roomCode: host.room.code, name: 'Guest', source: 'youtube', socketId: 'sock-1' });
+    // Same guest reconnects with a new socket — same pending request, no duplicate.
+    const req2 = store.requestJoin({ roomCode: host.room.code, name: 'Guest', source: 'youtube', socketId: 'sock-2' });
+    expect(req2.request.id).toBe(req1.request.id);
+    expect(store.serializeRoom(host.room).pendingJoins).toHaveLength(1);
+
+    // A different guest still gets their own request.
+    const req3 = store.requestJoin({ roomCode: host.room.code, name: 'Other', source: 'youtube', socketId: 'sock-3' });
+    expect(req3.request.id).not.toBe(req1.request.id);
+    expect(store.serializeRoom(host.room).pendingJoins).toHaveLength(2);
+  });
+
+  it('removes a disconnected guest after the grace period and frees the slot (N-15)', async () => {
+    const shortStore = new RoomStore({ ttlMs: 60000, maxParticipants: 2, hostGraceMs: 5000, guestGraceMs: 80 });
+    const host = shortStore.createRoom({ name: 'Host', initialTracks: [sampleTrack] });
+    const guest = shortStore.joinRoom({ roomCode: host.room.code, name: 'Guest' });
+
+    let removedRoom = null;
+    shortStore.markDisconnected(host.room.code, guest.participantId, null, (room) => {
+      removedRoom = room;
+    });
+    expect(shortStore.serializeRoom(host.room).participants).toHaveLength(2);
+
+    await new Promise((r) => setTimeout(r, 200));
+    expect(removedRoom).not.toBeNull();
+    expect(shortStore.serializeRoom(host.room).participants).toHaveLength(1);
+    // Token freed: the old token no longer resolves, and a new guest can join.
+    expect(shortStore.getParticipantBySessionToken(host.room.code, guest.sessionToken)).toBeNull();
+    const replacement = shortStore.joinRoom({ roomCode: host.room.code, name: 'NewGuest' });
+    expect(replacement.error).toBeUndefined();
+    expect(replacement.role).toBe('guest');
+  });
+
+  it('does not remove a guest who reconnects before the grace period ends (N-15)', async () => {
+    const shortStore = new RoomStore({ ttlMs: 60000, maxParticipants: 2, hostGraceMs: 5000, guestGraceMs: 80 });
+    const host = shortStore.createRoom({ name: 'Host', initialTracks: [sampleTrack] });
+    const guest = shortStore.joinRoom({ roomCode: host.room.code, name: 'Guest' });
+
+    shortStore.markDisconnected(host.room.code, guest.participantId);
+    const rec = shortStore.reconnect({ roomCode: host.room.code, sessionToken: guest.sessionToken });
+    expect(rec.error).toBeUndefined();
+
+    await new Promise((r) => setTimeout(r, 200));
+    expect(shortStore.serializeRoom(host.room).participants).toHaveLength(2);
+  });
+
+  it('never removes the host via the guest grace timer (N-15)', async () => {
+    const shortStore = new RoomStore({ ttlMs: 60000, maxParticipants: 2, hostGraceMs: 5000, guestGraceMs: 80 });
+    const host = shortStore.createRoom({ name: 'Host', initialTracks: [sampleTrack] });
+    shortStore.markDisconnected(host.room.code, host.participantId);
+    await new Promise((r) => setTimeout(r, 200));
+    expect(shortStore.serializeRoom(host.room).participants).toHaveLength(1);
+  });
+
   it('queues join requests when requireApproval is enabled and lets host accept or decline', () => {
     const host = store.createRoom({ name: 'Host', initialTracks: [sampleTrack] });
     store.updateSettings(host.room.code, host.participantId, { requireApproval: true });

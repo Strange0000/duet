@@ -15,6 +15,8 @@ export class LocalAudioPlayer extends BasePlayer {
     this.anchorPositionMs = 0;
     this.anchorMonoMs = 0;
     this.track = null;
+    this.volume = 0.85;
+    this.muted = false;
   }
 
   getCapabilities() {
@@ -35,7 +37,7 @@ export class LocalAudioPlayer extends BasePlayer {
       if (AudioCtx) {
         this.audioCtx = new AudioCtx();
         this.gainNode = this.audioCtx.createGain();
-        this.gainNode.gain.value = 0.06;
+        this._applyVolumeToGain();
         this.gainNode.connect(this.audioCtx.destination);
       }
     }
@@ -95,7 +97,14 @@ export class LocalAudioPlayer extends BasePlayer {
     }
   }
 
-  async loadTrack(track, startPositionMs = 0) {
+  _applyVolumeToGain() {
+    if (this.gainNode) {
+      // Base synth level is 0.06; scale it by the Duet volume (0..1).
+      this.gainNode.gain.value = this.muted ? 0 : 0.06 * this.volume;
+    }
+  }
+
+  async loadTrack(track, startPositionMs = 0, _shouldPlay = false) {
     this.track = track;
     this.durationMs = Math.max(1000, Math.round((track?.durationSec || 180) * 1000));
     this.anchorPositionMs = Math.max(0, Math.min(this.durationMs, startPositionMs));
@@ -145,6 +154,20 @@ export class LocalAudioPlayer extends BasePlayer {
 
   async getState() {
     return this.state;
+  }
+
+  async setVolume(volume01) {
+    this.volume = Math.max(0, Math.min(1, Number(volume01) || 0));
+    this._applyVolumeToGain();
+  }
+
+  async setMuted(muted) {
+    this.muted = Boolean(muted);
+    this._applyVolumeToGain();
+  }
+
+  async getVolume() {
+    return this.muted ? 0 : this.volume;
   }
 
   async destroy() {

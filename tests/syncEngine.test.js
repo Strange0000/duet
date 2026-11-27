@@ -65,6 +65,30 @@ describe('ClockSync & PlaybackSync', () => {
     expect(large.action).toBe('seek');
   });
 
+  it('never seeks the player back near its real end (N-02 / B2)', () => {
+    // Stored duration is 210s, so expectedMs is clamped there, but the real
+    // player duration is 274s and the player is 1s from its real end.
+    const nearEnd = evaluateDriftCorrection({
+      expectedMs: 210000,
+      actualMs: 273000,
+      lastCorrectionAtMs: 0,
+      nowMs: 10000,
+      playerDurationMs: 274000,
+    });
+    expect(nearEnd.action).toBe('none');
+    expect(nearEnd.nearEnd).toBe(true);
+
+    // More than 1500ms from the real end: the large drift still corrects.
+    const notNearEnd = evaluateDriftCorrection({
+      expectedMs: 210000,
+      actualMs: 270000,
+      lastCorrectionAtMs: 0,
+      nowMs: 10000,
+      playerDurationMs: 274000,
+    });
+    expect(notNearEnd.action).toBe('seek');
+  });
+
   it('rejects high-RTT outliers and computes median clock offset', async () => {
     const cs = new ClockSync();
     let idx = 0;

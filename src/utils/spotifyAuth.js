@@ -1,6 +1,7 @@
 const AUTH_STORAGE_KEY = 'duet_spotify_auth';
 const CLIENT_ID_STORAGE_KEY = 'duet_spotify_client_id';
 const PKCE_VERIFIER_KEY = 'duet_spotify_pkce_verifier';
+const OAUTH_STATE_KEY = 'duet_spotify_oauth_state';
 const RETURN_PATH_KEY = 'duet_spotify_return_path';
 
 const SPOTIFY_SCOPES = [
@@ -88,7 +89,11 @@ export async function startSpotifyLogin(customClientId) {
 
   const verifier = generateRandomString(64);
   const challenge = await generateCodeChallenge(verifier);
+  // N-20: OAuth `state` (CSRF protection) — random value stored locally and
+  // validated in handleSpotifyCallback.
+  const state = generateRandomString(32);
   sessionStorage.setItem(PKCE_VERIFIER_KEY, verifier);
+  sessionStorage.setItem(OAUTH_STATE_KEY, state);
   sessionStorage.setItem(RETURN_PATH_KEY, window.location.pathname + window.location.search);
 
   const params = new URLSearchParams({
@@ -98,6 +103,7 @@ export async function startSpotifyLogin(customClientId) {
     code_challenge_method: 'S256',
     code_challenge: challenge,
     redirect_uri: getSpotifyRedirectUri(),
+    state,
   });
 
   window.location.assign(`https://accounts.spotify.com/authorize?${params.toString()}`);
@@ -118,6 +124,14 @@ export async function handleSpotifyCallback(search) {
     throw new Error(`Spotify authorization failed: ${error}`);
   }
   const code = params.get('code');
+  // N-20: reject the callback if the returned state does not match the one
+  // stored when login started.
+  const returnedState = params.get('state');
+  const storedState = sessionStorage.getItem(OAUTH_STATE_KEY);
+  sessionStorage.removeItem(OAUTH_STATE_KEY);
+  if (!returnedState || !storedState || returnedState !== storedState) {
+    throw new Error('Spotify login was rejected: state mismatch. Please try connecting again.');
+  }
   const verifier = sessionStorage.getItem(PKCE_VERIFIER_KEY);
   const clientId = getSpotifyClientId();
   if (!code || !verifier || !clientId) {
@@ -181,25 +195,43 @@ export async function getValidSpotifyToken() {
     refresh_token: auth.refreshToken,
   });
 
-  const res = await fetch('https://accounts.spotify.com/api/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: body.toString(),
-  });
-  const data = await res.json();
-  if (!res.ok || !data.access_token) {
-    logoutSpotify();
+  // N-21: retry the refresh once; only log out on a real auth failure
+  // (400/401 with invalid_grant / invalid_client). A transient failure
+  // (network error, 5xx) returns null WITHOUT logging the user out.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let res;
+    try {
+      res = await fetch('https://accounts.spotify.com/api/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: body.toString(),
+      });
+    } catch {
+      if (attempt === 0) continue; // transient network error — retry once
+      return null;
+    }
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.access_token) {
+      const updated = {
+        ...auth,
+        accessToken: data.access_token,
+        refreshToken: data.refresh_token || auth.refreshToken,
+        expiresAt: Date.now() + (Number(data.expires_in) || 3600) * 1000,
+      };
+      saveSpotifyAuth(updated);
+      return updated.accessToken;
+    }
+    const isAuthFailure =
+      (res.status === 400 || res.status === 401) &&
+      (data.error === 'invalid_grant' || data.error === 'invalid_client');
+    if (isAuthFailure) {
+      logoutSpotify();
+      return null;
+    }
+    if (attempt === 0 && (res.status >= 500 || res.status === 429)) continue; // transient — retry once
     return null;
   }
-
-  const updated = {
-    ...auth,
-    accessToken: data.access_token,
-    refreshToken: data.refresh_token || auth.refreshToken,
-    expiresAt: Date.now() + (Number(data.expires_in) || 3600) * 1000,
-  };
-  saveSpotifyAuth(updated);
-  return updated.accessToken;
+  return null;
 }
 
 export async function resolveSpotifyUri(track, token) {

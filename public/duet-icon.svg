@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7c3aed"/>
+      <stop offset="1" stop-color="#db2777"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#g)"/>
+  <!-- Duet "D" + music note mark -->
+  <path d="M186 388V124h84c74 0 124 50 124 132s-50 132-124 132h-84zm56-56h26c44 0 70-28 70-76s-26-76-70-76h-26v152z" fill="#fff"/>
+  <circle cx="352" cy="392" r="26" fill="#fff"/>
+  <rect x="372" y="252" width="10" height="140" rx="5" fill="#fff"/>
+</svg>

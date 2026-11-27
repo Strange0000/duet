@@ -16,7 +16,7 @@ import {
   Volume2,
   Zap,
 } from 'lucide-react';
-import { INITIAL_TRACKS, formatTime } from '../data/mockTracks';
+import { INITIAL_TRACKS, SEARCH_CATALOG, formatTime } from '../data/mockTracks';
 import { fetchSongArtwork } from '../utils/artworkApi';
 import { getStoredSpotifyAuth } from '../utils/spotifyAuth';
 import AudioVisualizerCanvas from './AudioVisualizerCanvas';
@@ -42,7 +42,7 @@ const FEATURES = [
   {
     icon: Share2,
     title: 'Create & Share',
-    body: 'Tap once to create a room. Share a 6-digit code or invite link—no sign-up for guests.',
+    body: 'Tap once to create a room. Share a 6-character code or invite link—no sign-up for guests.',
     gradient: 'from-violet-600 to-fuchsia-600',
   },
   {
@@ -71,7 +71,7 @@ const FAQS = [
   },
   {
     q: 'What if the YouTube video has a different intro length?',
-    a: 'Duet includes a ±0.5s intro offset nudge so you can align the beat in one tap without interrupting your partner.',
+    a: 'Duet uses clock-compensated sync: each phone measures its clock against the server, so both stay aligned to the same second without any manual offset. If drift ever creeps in, one tap on Resync snaps both phones back together.',
   },
   {
     q: 'Why do guests see a "Tap to Join Audio" button?',
@@ -80,17 +80,63 @@ const FAQS = [
 ];
 
 const TRENDING_SONGS = [
-  { img: '/cover-midnight.jpg', title: 'Midnight City', artist: 'M83', plays: '2.4M', hot: true },
-  { img: '/cover-instant.jpg', title: 'Instant Crush', artist: 'Daft Punk', plays: '1.8M', hot: false },
-  { img: '/cover-resonance.jpg', title: 'Resonance', artist: 'HOME', plays: '3.1M', hot: true },
-  { img: '/cover-synth.jpg', title: 'Blinding Lights', artist: 'The Weeknd', plays: '5.7M', hot: true },
-  { img: '/cover-soul.jpg', title: 'Redbone', artist: 'Childish Gambino', plays: '1.2M', hot: false },
-  { img: '/cover-indie.jpg', title: 'The Less I Know The Better', artist: 'Tame Impala', plays: '4.0M', hot: true },
-  { img: '/cover-synth.jpg', title: 'Starboy', artist: 'The Weeknd', plays: '3.3M', hot: false },
-  { img: '/cover-instant.jpg', title: 'After Dark', artist: 'Mr.Kitty', plays: '2.9M', hot: true },
-  { img: '/cover-indie.jpg', title: 'Dreams', artist: 'Fleetwood Mac', plays: '1.5M', hot: false },
-  { img: '/cover-soul.jpg', title: 'Sweater Weather', artist: 'The Neighbourhood', plays: '2.1M', hot: false },
+  { img: '/cover-midnight.jpg', title: 'Midnight City', artist: 'M83', hot: true },
+  { img: '/cover-instant.jpg', title: 'Instant Crush', artist: 'Daft Punk', hot: false },
+  { img: '/cover-resonance.jpg', title: 'Resonance', artist: 'HOME', hot: true },
+  { img: '/cover-synth.jpg', title: 'Blinding Lights', artist: 'The Weeknd', hot: true },
+  { img: '/cover-soul.jpg', title: 'Redbone', artist: 'Childish Gambino', hot: false },
+  { img: '/cover-indie.jpg', title: 'The Less I Know The Better', artist: 'Tame Impala', hot: true },
+  { img: '/cover-synth.jpg', title: 'Starboy', artist: 'The Weeknd', hot: false },
+  { img: '/cover-instant.jpg', title: 'After Dark', artist: 'Mr.Kitty', hot: true },
+  { img: '/cover-indie.jpg', title: 'Dreams', artist: 'Fleetwood Mac', hot: false },
+  { img: '/cover-soul.jpg', title: 'Sweater Weather', artist: 'The Neighbourhood', hot: false },
 ];
+
+/* m5: turn a bare server/join error into a friendly message with a next step. */
+function friendlyRoomError(err) {
+  if (!err) return '';
+  const text = String(err);
+  if (/not found|expired|ROOM_NOT_FOUND/i.test(text)) {
+    return 'Room not found or expired. Check the code, ask the host for a new link, or start your own room.';
+  }
+  if (/full|ROOM_FULL/i.test(text)) {
+    return 'That room is already full (2 people max). Ask the host for a new link, or start your own room.';
+  }
+  return text;
+}
+
+const TRENDING_GRADIENTS = [
+  'from-violet-600 via-fuchsia-500 to-orange-400',
+  'from-slate-900 via-indigo-800 to-cyan-500',
+  'from-rose-500 via-purple-600 to-indigo-700',
+  'from-red-600 via-rose-600 to-amber-500',
+  'from-amber-400 via-orange-500 to-pink-600',
+  'from-zinc-900 via-violet-900 to-fuchsia-700',
+  'from-sky-500 via-blue-700 to-indigo-950',
+  'from-emerald-500 via-teal-600 to-cyan-700',
+];
+
+/* M6: map a trending card to a real built-in track when one exists, so the
+   demo opens with THAT track — not always Midnight City. */
+function resolveTrendingTrack(song, index = 0) {
+  const found = [...INITIAL_TRACKS, ...SEARCH_CATALOG].find(
+    (t) => t.title.toLowerCase() === song.title.toLowerCase()
+  );
+  if (found) return found;
+  return {
+    id: `trend-${song.title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+    title: song.title,
+    artist: song.artist,
+    album: 'Single',
+    durationSec: 210,
+    coverImage: song.img,
+    coverGradient: TRENDING_GRADIENTS[index % TRENDING_GRADIENTS.length],
+    accentColor: '#7c3aed',
+    secondaryColor: '#f43f5e',
+    youtubeId: null,
+    spotifyUri: null,
+  };
+}
 
 /* ——— Scroll-reveal hook ——— */
 function useReveal() {
@@ -126,6 +172,10 @@ export default function LandingPage({
   const [connectedSource, setConnectedSource] = useState('youtube'); // 'youtube' | 'audio' | 'spotify'
   const [spotifyAuth, setSpotifyAuth] = useState(() => getStoredSpotifyAuth());
   const [trendingSongs, setTrendingSongs] = useState(TRENDING_SONGS);
+  const trendingRef = useRef(null);
+  const scrollTrending = (dir) => {
+    trendingRef.current?.scrollBy({ left: dir * 480, behavior: 'smooth' });
+  };
 
   /* Fetch real album art via free iTunes Search API */
   useEffect(() => {
@@ -168,7 +218,7 @@ export default function LandingPage({
   const handleJoin = (e) => {
     e.preventDefault();
     const c = joinCode.trim().toUpperCase();
-    if (c.length < 4) { setJoinErr('Enter a 4–6 character room code'); return; }
+    if (c.length !== 6) { setJoinErr('Enter the 6-character room code'); return; }
     setJoinErr('');
     onJoinRoom(c, connectedSource);
   };
@@ -209,7 +259,7 @@ export default function LandingPage({
             <a href="#faq"        className="transition hover:text-white">FAQ</a>
           </nav>
           <div className="flex items-center gap-2 sm:gap-3">
-            <button onClick={onOpenDemo} className="hidden rounded-full px-4 py-2 text-sm font-semibold text-zinc-400 transition hover:text-white sm:inline-flex cursor-pointer">
+            <button onClick={() => onOpenDemo()} className="hidden rounded-full px-4 py-2 text-sm font-semibold text-zinc-400 transition hover:text-white sm:inline-flex cursor-pointer">
               Live Demo
             </button>
 
@@ -322,7 +372,7 @@ export default function LandingPage({
               disabled={roomLoading}
               className="inline-flex items-center gap-1.5 rounded-full bg-white px-3.5 py-2 text-xs font-semibold text-zinc-950 shadow-sm transition-all hover:bg-zinc-200 active:scale-[0.97] disabled:opacity-50 sm:gap-2 sm:px-5 sm:py-2.5 sm:text-sm cursor-pointer"
             >
-              {roomLoading ? 'Creating...' : 'Start a Room'} <ArrowRight className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+              {roomLoading ? 'Creating your room…' : 'Start a Room'} <ArrowRight className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
             </button>
           </div>
         </div>
@@ -361,7 +411,7 @@ export default function LandingPage({
                   className="gradient-border inline-flex w-full items-center justify-center gap-2.5 rounded-full bg-white px-7 py-3.5 text-sm font-bold text-zinc-950 shadow-lg shadow-violet-600/20 transition-all hover:-translate-y-0.5 active:translate-y-0 disabled:opacity-50 sm:w-auto cursor-pointer"
                 >
                   <Play className="h-4 w-4 fill-current" />
-                  {roomLoading ? 'Creating Room...' : 'Create a Room'}
+                  {roomLoading ? 'Creating your room…' : 'Create a Room'}
                 </button>
                 <form onSubmit={handleJoin} className="flex w-full items-center rounded-full border border-white/10 bg-white/5 p-1 pl-4 backdrop-blur-sm transition focus-within:border-white/25 focus-within:bg-white/10 sm:w-auto">
                   <input
@@ -373,7 +423,12 @@ export default function LandingPage({
                   <button type="submit" disabled={roomLoading} className="rounded-full bg-white/10 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/20 disabled:opacity-50 cursor-pointer">Join</button>
                 </form>
               </div>
-              {(joinErr || roomError) && <p className="mt-2 text-xs font-medium text-rose-400">{joinErr || roomError}</p>}
+              {roomLoading && (
+                <p className="mt-3 text-xs font-medium text-zinc-400">
+                  Creating your room… this can take up to ~60 seconds while the server wakes up.
+                </p>
+              )}
+              {(joinErr || roomError) && <p className="mt-2 text-xs font-medium text-rose-400">{joinErr || friendlyRoomError(roomError)}</p>}
               {pendingApproval && (
                 <div className="mt-3 inline-flex items-center gap-2 rounded-full border border-violet-500/30 bg-violet-500/15 px-4 py-1.5 text-xs font-semibold text-violet-200">
                   <span className="h-2 w-2 animate-pulse rounded-full bg-violet-400" />
@@ -382,7 +437,7 @@ export default function LandingPage({
               )}
 
               <div className="animate-fade-up-d2 mt-4 flex flex-wrap items-center justify-center gap-4">
-                <button onClick={onOpenDemo} className="text-xs font-semibold text-zinc-500 underline decoration-zinc-700 underline-offset-4 transition hover:text-white cursor-pointer">
+                <button onClick={() => onOpenDemo()} className="text-xs font-semibold text-zinc-500 underline decoration-zinc-700 underline-offset-4 transition hover:text-white cursor-pointer">
                   Preview Demo Mode (Offline)
                 </button>
                 {lastRoomCode && (
@@ -432,12 +487,6 @@ export default function LandingPage({
                     <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
                   </span>
                   <span className="text-xs font-semibold text-zinc-300">Synced • 14ms drift</span>
-                </div>
-              </div>
-              <div className="pointer-events-none absolute bottom-24 -right-6 z-30 hidden xl:block">
-                <div className="animate-float-gentle flex items-center gap-2 rounded-full border border-white/10 bg-zinc-900/80 px-3.5 py-2 shadow-lg backdrop-blur-lg">
-                  <Disc3 className="h-3.5 w-3.5 text-violet-400 animate-rotate-disc" style={{ animationDuration: '6s' }} />
-                  <span className="font-mono text-xs font-semibold text-zinc-300">{formatTime(demoTime)}</span>
                 </div>
               </div>
             </div>
@@ -639,19 +688,25 @@ export default function LandingPage({
                 <p className="text-xs font-bold tracking-widest text-violet-400 uppercase">Trending on Duet</p>
                 <h2 className="mt-2 font-display text-2xl font-bold text-white sm:text-3xl">Most popular songs right now</h2>
               </div>
-              <span className="hidden text-xs font-semibold text-zinc-600 sm:inline">Auto-scrolling →</span>
+              <span className="hidden text-xs font-semibold text-zinc-600 sm:inline">Scroll for more →</span>
             </div>
           </div>
 
-          {/* Full-width edge-to-edge marquee — Row 1 */}
-          <div className="relative mt-8">
-            <div className="flex gap-4 overflow-hidden">
-              <div className="flex shrink-0 gap-4" style={{ animation: 'marqueeLeft 40s linear infinite' }}>
-                {[...trendingSongs, ...trendingSongs].map((song, i) => (
+          {/* m9: scrollable row with side padding + arrow affordance (cards are
+              no longer clipped at the viewport edges with no way to reach them) */}
+          <div className="relative mt-8 px-5 sm:px-8">
+            <div
+              ref={trendingRef}
+              className="flex gap-4 overflow-x-auto pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+              style={{ scrollSnapType: 'x mandatory' }}
+              aria-label="Trending songs — scroll to see more"
+            >
+              {trendingSongs.map((song, i) => (
                   <div
-                    key={i}
-                    onClick={onOpenDemo}
+                    key={song.title}
+                    onClick={() => onOpenDemo(resolveTrendingTrack(song, i))}
                     className="group relative w-44 shrink-0 cursor-pointer sm:w-52"
+                    style={{ scrollSnapAlign: 'start' }}
                   >
                     <div className="relative overflow-hidden rounded-2xl">
                       <img src={song.img} alt={song.title} className="aspect-square w-full object-cover transition-transform duration-500 group-hover:scale-105" />
@@ -668,26 +723,30 @@ export default function LandingPage({
                     </div>
                     <div className="mt-2.5 px-0.5">
                       <p className="truncate text-sm font-bold text-white">{song.title}</p>
-                      <div className="mt-0.5 flex items-center justify-between">
-                        <p className="truncate text-xs text-zinc-500">{song.artist}</p>
-                        <span className="shrink-0 text-[11px] font-semibold text-zinc-600">{song.plays}</span>
-                      </div>
+                      <p className="mt-0.5 truncate text-xs text-zinc-500">{song.artist}</p>
                     </div>
                   </div>
                 ))}
-              </div>
             </div>
             {/* Edge fades */}
             <div className="pointer-events-none absolute inset-y-0 left-0 z-10 w-16 bg-gradient-to-r from-zinc-950 to-transparent sm:w-24" />
             <div className="pointer-events-none absolute inset-y-0 right-0 z-10 w-16 bg-gradient-to-l from-zinc-950 to-transparent sm:w-24" />
+            <button
+              onClick={() => scrollTrending(-1)}
+              aria-label="Scroll trending songs left"
+              className="absolute left-2 top-1/2 z-20 hidden h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-white/10 bg-zinc-900/90 text-white shadow-lg transition hover:bg-zinc-800 sm:flex cursor-pointer"
+            >
+              ‹
+            </button>
+            <button
+              onClick={() => scrollTrending(1)}
+              aria-label="Scroll trending songs right"
+              className="absolute right-2 top-1/2 z-20 hidden h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-white/10 bg-zinc-900/90 text-white shadow-lg transition hover:bg-zinc-800 sm:flex cursor-pointer"
+            >
+              ›
+            </button>
           </div>
 
-          <style>{`
-            @keyframes marqueeLeft {
-              from { transform: translateX(0); }
-              to   { transform: translateX(-50%); }
-            }
-          `}</style>
         </section>
 
         {/* ───────── TECH DETAILS ───────── */}
@@ -702,7 +761,7 @@ export default function LandingPage({
               {[
                 { icon: Sparkles, title: 'Clock-compensated sync', text: 'Each transport event carries a server timestamp and round-trip offset. Drift under 350ms stays smooth; larger drift snaps right back.' },
                 { icon: Volume2, title: 'Mobile autoplay unlock', text: 'iOS Safari and Android Chrome block unmuted playback without a tap. One "Tap to Join Audio" action unlocks and snaps to the host\'s second.' },
-                { icon: Smartphone, title: 'Intro offset nudge (±0.5s)', text: 'If a YouTube video has a slightly longer intro than the Spotify master, nudge your local offset without interrupting your partner.' },
+                { icon: Smartphone, title: 'One-tap resync', text: 'If drift ever creeps in, one tap on Resync re-measures the clock offset and snaps both phones back together — no manual offset needed.' },
               ].map((item) => {
                 const Icon = item.icon;
                 return (
@@ -755,7 +814,7 @@ export default function LandingPage({
             <p className="mx-auto mt-4 max-w-md text-base text-zinc-400">Create a room in one tap. Share a code. Listen to the same song at the same second.</p>
             <button onClick={() => onCreateRoom(connectedSource)} disabled={roomLoading} className="mt-8 inline-flex items-center gap-2.5 rounded-full bg-white px-8 py-4 text-sm font-bold text-zinc-950 shadow-lg shadow-violet-600/15 transition-all hover:-translate-y-0.5 hover:shadow-xl active:translate-y-0 disabled:opacity-50 cursor-pointer">
               <Play className="h-4 w-4 fill-current" />
-              Create a Room — Free
+              {roomLoading ? 'Creating your room…' : 'Create a Room — Free'}
             </button>
           </div>
         </section>
@@ -783,7 +842,7 @@ export default function LandingPage({
       </footer>
 
       {/* Footer privacy dialog */}
-      <dialog id="duet-privacy-modal" className="max-w-sm rounded-3xl border border-white/10 bg-zinc-900 p-6 text-white backdrop:bg-black/60 backdrop:backdrop-blur-sm">
+      <dialog id="duet-privacy-modal" className="m-auto max-w-sm rounded-3xl border border-white/10 bg-zinc-900 p-6 text-white backdrop:bg-black/60 backdrop:backdrop-blur-sm">
         <div className="flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-600/20 text-emerald-400">
             <Sparkles className="h-5 w-5" />

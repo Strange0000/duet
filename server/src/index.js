@@ -7,7 +7,7 @@ import { Server as SocketIOServer } from 'socket.io';
 import { env } from './config/env.js';
 import { RoomStore } from './stores/roomStore.js';
 import { registerSocketHandlers } from './sockets/registerSocketHandlers.js';
-import { unifiedSearch, lookupYouTubeVideo } from './services/searchService.js';
+import { unifiedSearch, lookupYouTubeVideo, resolveYouTubeTrack } from './services/searchService.js';
 
 export function createApp({ store: customStore } = {}) {
   const app = express();
@@ -119,6 +119,27 @@ export function createApp({ store: customStore } = {}) {
       res.json(result);
     } catch (err) {
       res.status(502).json({ error: 'YouTube lookup failed', detail: err.message });
+    }
+  });
+
+  // N-01: resolve an iTunes search result (title + artist) to the best
+  // matching embeddable YouTube video. When no YOUTUBE_API_KEY is configured
+  // this honestly returns { item: null, configured: false } — no scraping,
+  // no fabricated video IDs.
+  app.get('/api/youtube/resolve', async (req, res) => {
+    const title = String(req.query.title || '').trim();
+    const artist = String(req.query.artist || '').trim();
+    if (!title || title.length > 200 || artist.length > 200) {
+      return res.status(400).json({ error: 'Query parameter title (1–200 chars) is required' });
+    }
+    try {
+      const result = await resolveYouTubeTrack(title, artist);
+      if (result.error) {
+        return res.status(503).json({ item: null, configured: true, error: result.error });
+      }
+      res.json(result);
+    } catch (err) {
+      res.status(502).json({ error: 'YouTube resolve failed', detail: err.message });
     }
   });
 

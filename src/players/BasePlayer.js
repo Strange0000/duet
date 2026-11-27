@@ -4,7 +4,7 @@ export class BasePlayer {
   }
 
   async initialize(_containerEl) {}
-  async loadTrack(_track, _startPositionMs = 0) {}
+  async loadTrack(_track, _startPositionMs = 0, _shouldPlay = false) {}
   async play() {}
   async pause() {}
   async seek(_positionMs) {}
@@ -16,6 +16,11 @@ export class BasePlayer {
   }
   async getState() {
     return 'idle';
+  }
+  async setVolume(_volume01) {}
+  async setMuted(_muted) {}
+  async getVolume() {
+    return 1;
   }
   async destroy() {}
 

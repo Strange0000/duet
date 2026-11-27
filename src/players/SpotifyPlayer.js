@@ -3,6 +3,8 @@ import { getValidSpotifyToken, resolveSpotifyUri } from '../utils/spotifyAuth.js
 
 let sdkPromise = null;
 
+const SPOTIFY_LOAD_TIMEOUT_MS = 15000;
+
 function loadSpotifySDK() {
   if (typeof window === 'undefined') {
     return Promise.reject(new Error('Spotify SDK requires a browser environment'));
@@ -13,17 +15,46 @@ function loadSpotifySDK() {
   if (sdkPromise) return sdkPromise;
 
   sdkPromise = new Promise((resolve, reject) => {
+    let settled = false;
     const prevReady = window.onSpotifyWebPlaybackSDKReady;
+
+    const cleanup = () => {
+      clearTimeout(timer);
+      clearInterval(poll);
+    };
+    const fail = (err) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      sdkPromise = null;
+      reject(err);
+    };
+    const succeed = () => {
+      if (settled) return;
+      if (!window.Spotify || !window.Spotify.Player) return;
+      settled = true;
+      cleanup();
+      resolve(window.Spotify);
+    };
+
+    // 15s timeout + polling: if the script tag already exists but the SDK
+    // never loads (ad-blocker, failed earlier load), never hang forever (N-07).
+    const timer = setTimeout(
+      () => fail(new Error('Spotify player failed to load — check your connection or ad-blocker')),
+      SPOTIFY_LOAD_TIMEOUT_MS
+    );
+    const poll = setInterval(succeed, 250);
+
     window.onSpotifyWebPlaybackSDKReady = () => {
       if (typeof prevReady === 'function') prevReady();
-      resolve(window.Spotify);
+      succeed();
     };
 
     if (!document.querySelector('script[src="https://sdk.scdn.co/spotify-player.js"]')) {
       const script = document.createElement('script');
       script.src = 'https://sdk.scdn.co/spotify-player.js';
       script.async = true;
-      script.onerror = () => reject(new Error('Failed to load Spotify Web Playback SDK'));
+      script.onerror = () => fail(new Error('Failed to load Spotify Web Playback SDK'));
       document.head.appendChild(script);
     }
   });
@@ -43,6 +74,8 @@ export class SpotifyPlayer extends BasePlayer {
     this.lastDurationMs = 0;
     this.lastUpdateMono = 0;
     this.wasPlaying = false;
+    this.volume = 0.85;
+    this.muted = false;
   }
 
   getCapabilities() {
@@ -71,9 +104,18 @@ export class SpotifyPlayer extends BasePlayer {
         name: 'Duet Synced Player',
         getOAuthToken: async (cb) => {
           const fresh = await getValidSpotifyToken();
-          if (fresh) cb(fresh);
+          if (fresh) {
+            cb(fresh);
+            return;
+          }
+          // N-22: never call cb('') and never leave the SDK waiting silently
+          // with no token — surface the auth failure so the UI shows it.
+          this.callbacks.onError?.({
+            code: 'SPOTIFY_AUTH',
+            message: 'Spotify session expired — please reconnect Spotify.',
+          });
         },
-        volume: 0.85,
+        volume: this.muted ? 0 : this.volume,
       });
 
       this.player.addListener('ready', ({ device_id }) => {
@@ -159,7 +201,7 @@ export class SpotifyPlayer extends BasePlayer {
     });
   }
 
-  async loadTrack(track, startPositionMs = 0) {
+  async loadTrack(track, startPositionMs = 0, _shouldPlay = false) {
     const token = await getValidSpotifyToken();
     if (!token || !this.deviceId) return;
 
@@ -256,6 +298,34 @@ export class SpotifyPlayer extends BasePlayer {
 
   async getState() {
     return this.state;
+  }
+
+  async setVolume(volume01) {
+    this.volume = Math.max(0, Math.min(1, Number(volume01) || 0));
+    if (!this.player || typeof this.player.setVolume !== 'function') return;
+    try {
+      // The Web Playback SDK has no mute; mute is emulated via volume 0.
+      await this.player.setVolume(this.muted ? 0 : this.volume);
+    } catch {
+      // Ignore
+    }
+  }
+
+  async setMuted(muted) {
+    this.muted = Boolean(muted);
+    await this.setVolume(this.volume);
+  }
+
+  async getVolume() {
+    if (this.player && typeof this.player.getVolume === 'function') {
+      try {
+        const v = await this.player.getVolume();
+        if (typeof v === 'number') return Math.max(0, Math.min(1, v));
+      } catch {
+        // Fall through to the stored value
+      }
+    }
+    return this.muted ? 0 : this.volume;
   }
 
   async destroy() {

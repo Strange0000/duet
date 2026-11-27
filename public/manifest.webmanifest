@@ -1,18 +1,24 @@
 {
-  "name": "Duet — Listen Together",
-  "short_name": "Duet",
-  "description": "Two phones. One song. Same second. Private synchronized listening rooms.",
-  "start_url": "/",
-  "display": "standalone",
   "background_color": "#09090b",
-  "theme_color": "#09090b",
-  "orientation": "portrait-primary",
+  "description": "Two phones. One song. Same second. Private synchronized listening rooms.",
+  "display": "standalone",
   "icons": [
     {
-      "src": "/cover-midnight.jpg",
+      "purpose": "any",
+      "sizes": "192x192",
+      "src": "/duet-icon.svg",
+      "type": "image/svg+xml"
+    },
+    {
+      "purpose": "any",
       "sizes": "512x512",
-      "type": "image/jpeg",
-      "purpose": "any"
+      "src": "/duet-icon.svg",
+      "type": "image/svg+xml"
     }
-  ]
+  ],
+  "name": "Duet \u2014 Listen Together",
+  "orientation": "any",
+  "short_name": "Duet",
+  "start_url": "/",
+  "theme_color": "#09090b"
 }
