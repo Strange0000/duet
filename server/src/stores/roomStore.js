@@ -62,6 +62,29 @@ export class RoomStore {
     return Boolean(participant && (participant.role === 'host' || room.settings.allowGuestControl));
   }
 
+  // R7(b): participant names must be distinct within a room, otherwise
+  // toasts, presence and chat are ambiguous (two participants both called
+  // e.g. "Diana"). If the requested name is already used by another
+  // participant — or by a pending join request — append " 2", " 3", …
+  // until it is unique. Comparison is case-insensitive. Names are capped
+  // at 40 chars by the event validators, so the base is trimmed to leave
+  // room for the suffix.
+  _uniqueNameInRoom(room, desiredName, excludeParticipantId = null) {
+    const base = String(desiredName || 'Guest').trim() || 'Guest';
+    const taken = new Set();
+    for (const p of room.participants.values()) {
+      if (p.id !== excludeParticipantId) taken.add(String(p.name || '').trim().toLowerCase());
+    }
+    for (const req of room.pendingJoins?.values() || []) {
+      taken.add(String(req.name || '').trim().toLowerCase());
+    }
+    if (!taken.has(base.toLowerCase())) return base;
+    const shortBase = base.length > 38 ? base.slice(0, 38).trimEnd() : base;
+    let n = 2;
+    while (taken.has(`${shortBase} ${n}`.toLowerCase())) n += 1;
+    return `${shortBase} ${n}`;
+  }
+
   _deriveLifecycleState(room) {
     if (room.closed) return 'Room closed';
     if (this._now() > room.expiresAtMs) return 'Room expired';
@@ -173,7 +196,9 @@ export class RoomStore {
       hostGraceTimer: null,
       processedCommands: new Set(),
       settings: {
-        allowGuestQueue: false,
+        // R2(c): a two-person app — guest queue adds are ON by default for
+        // new rooms; the host can still turn them off in Room settings.
+        allowGuestQueue: true,
         allowGuestControl: false,
         requireApproval: false,
         theme: 'midnight',
@@ -258,6 +283,9 @@ export class RoomStore {
         return { room, request: existing };
       }
     }
+    // R7(b): the name shown to the host ("X wants to join") must not
+    // collide with a name already in the room.
+    name = this._uniqueNameInRoom(room, name);
     const request = {
       id: generateId('req'),
       name,
@@ -369,6 +397,9 @@ export class RoomStore {
       return { error: 'Room is full (maximum 2 participants)', code: 'ROOM_FULL' };
     }
 
+    // R7(b): never give two participants in the same room the same name.
+    name = this._uniqueNameInRoom(room, name);
+
     const now = this._now();
     const participantId = generateId('usr');
     const newSessionToken = generateSessionToken();
@@ -453,11 +484,24 @@ export class RoomStore {
     return room;
   }
 
-  markDisconnected(roomCode, participantId, onHostGraceExpired, onGuestRemoved) {
+  markDisconnected(roomCode, participantId, onHostGraceExpired, onGuestRemoved, socketId) {
     const room = this.getRoom(roomCode);
     if (!room) return null;
     const p = room.participants.get(participantId);
     if (!p) return null;
+
+    // R2(a): ignore a STALE disconnect. When a guest's socket drops and the
+    // client reconnects fast, the server only notices the old socket is dead
+    // later (heartbeat timeout) — after the participant already re-attached
+    // on the new socket via room:reconnect. Marking the participant
+    // disconnected then arms the guest grace timer, which 60s later deletes
+    // a live participant out from under its connected socket, so every later
+    // command fails 'Participant not found'. Only the currently attached
+    // socket may mark the participant disconnected. (socketId is optional
+    // so older callers / tests without one keep the previous behaviour.)
+    if (socketId && p.socketId && p.socketId !== socketId) {
+      return null;
+    }
 
     p.connected = false;
     p.socketId = null;
@@ -601,7 +645,8 @@ export class RoomStore {
     const p = room.participants.get(participantId);
     if (!p) return { error: 'Participant not found', code: 'PARTICIPANT_NOT_FOUND' };
 
-    if (name) p.name = name;
+    // R7(b): a rename must not collide with the other participant's name.
+    if (name) p.name = this._uniqueNameInRoom(room, name, participantId);
     if (source) {
       p.source = source;
       p.ready = false;
@@ -754,7 +799,10 @@ export class RoomStore {
     if (!p) return { error: 'Participant not found', code: 'PARTICIPANT_NOT_FOUND' };
 
     if (!this._canControl(room, p) && !room.settings.allowGuestQueue) {
-      return { error: 'Guest queue additions are disabled by the host', code: 'UNAUTHORIZED' };
+      // R2(b): distinct code for the disabled case — the client maps this to
+      // the honest message, and it must never be confused with a missing
+      // participant (which is UNAUTHORIZED / PARTICIPANT_NOT_FOUND).
+      return { error: 'Guest queue additions are disabled by the host', code: 'GUEST_QUEUE_DISABLED' };
     }
 
     const check = this._isDuplicateOrStale(room, commandId, expectedRoomVersion);

@@ -750,7 +750,11 @@ export function registerSocketHandlers(io, store, env) {
         // broadcast the updated room state so the host sees the freed slot.
         (removedRoom) => {
           io.to(removedRoom.code).emit('room:state', store.serializeRoom(removedRoom));
-        }
+        },
+        // R2(a): pass the disconnecting socket's id so a stale disconnect
+        // (old socket noticed dead after the participant re-attached on a
+        // new socket) cannot mark a live participant disconnected.
+        socket.id
       );
 
       if (room) {

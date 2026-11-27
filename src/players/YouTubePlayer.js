@@ -85,6 +85,10 @@ export class YouTubePlayer extends BasePlayer {
     this.state = 'idle';
     this.isReady = false;
     this.pendingVideo = null;
+    // R1: the videoId that has actually reached PLAYING at least once.
+    // A video that was only cued (cueVideoById) often never starts when
+    // playVideo() is called on it — it sits on "Buffering" at 00:00.
+    this.hasPlayedVideoId = null;
     this.volume = 0.85;
     this.muted = false;
   }
@@ -154,6 +158,7 @@ export class YouTubePlayer extends BasePlayer {
             if (!YTState) return;
             if (event.data === YTState.PLAYING) {
               this.state = 'playing';
+              this.hasPlayedVideoId = this.currentVideoId;
               this.callbacks.onStateChange?.('playing');
             } else if (event.data === YTState.PAUSED) {
               this.state = 'paused';
@@ -192,10 +197,16 @@ export class YouTubePlayer extends BasePlayer {
     const startSec = Math.max(0, startPositionMs / 1000);
     if (this.currentVideoId === videoId) {
       await this.seek(startPositionMs);
+      // R1: a same-video re-apply with shouldPlay used to stop at the seek —
+      // for a video that was only ever cued, that leaves it paused at 00:00
+      // forever. Route through play(), which force-loads a never-played
+      // video (see below).
+      if (shouldPlay) await this.play();
       return;
     }
 
     this.currentVideoId = videoId;
+    this.hasPlayedVideoId = null;
     if (!this.isReady || !this.player) {
       this.pendingVideo = { videoId, startSec, shouldPlay };
       return;
@@ -212,7 +223,33 @@ export class YouTubePlayer extends BasePlayer {
   }
 
   async play() {
-    if (!this.isReady || !this.player) return;
+    if (!this.isReady || !this.player) {
+      // R1: a play() issued while the player is still initialising used to
+      // be silently dropped, and the UI spun on "Loading…" forever. Remember
+      // the intent so onReady loads AND plays instead of cueing paused.
+      if (this.pendingVideo) {
+        this.pendingVideo.shouldPlay = true;
+      } else if (this.currentVideoId) {
+        this.pendingVideo = { videoId: this.currentVideoId, startSec: 0, shouldPlay: true };
+      }
+      return;
+    }
+    // R1: a video that was only cued (cueVideoById) often never starts on
+    // playVideo() — the live test's first Play sat on "Buffering" at 00:00
+    // for ~40s in both YouTube and Audio Only modes, while loadVideoById
+    // (the path Next uses) started at once. Force a real load+play for a
+    // video that has never actually played yet.
+    if (this.currentVideoId && this.hasPlayedVideoId !== this.currentVideoId) {
+      let startSec = 0;
+      try {
+        startSec = Math.max(0, this.player.getCurrentTime?.() || 0);
+      } catch {
+        // Fall through with startSec 0; the drift loop seeks to the
+        // expected position once playback starts.
+      }
+      this.player.loadVideoById({ videoId: this.currentVideoId, startSeconds: startSec });
+      return;
+    }
     this.player.playVideo();
   }
 
@@ -236,6 +273,19 @@ export class YouTubePlayer extends BasePlayer {
   async getDuration() {
     if (!this.isReady || !this.player || typeof this.player.getDuration !== 'function') {
       return 0;
+    }
+    // R5: right after Next, getDuration() still reports the PREVIOUS video's
+    // length until the new video finishes loading. Reporting that would
+    // corrupt the new track's duration server-side (player:duration). Return
+    // 0 ("unknown") until the video actually loaded is the current one.
+    try {
+      const url = this.player.getVideoUrl?.();
+      if (typeof url === 'string' && url) {
+        const loaded = new URL(url).searchParams.get('v');
+        if (loaded && this.currentVideoId && loaded !== this.currentVideoId) return 0;
+      }
+    } catch {
+      // Fall through to the real duration when the URL is unreadable.
     }
     return Math.max(0, Math.round(this.player.getDuration() * 1000));
   }
@@ -302,5 +352,7 @@ export class YouTubePlayer extends BasePlayer {
     this.player = null;
     this.isReady = false;
     this.currentVideoId = null;
+    this.hasPlayedVideoId = null;
+    this.pendingVideo = null;
   }
 }

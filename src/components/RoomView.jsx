@@ -32,6 +32,7 @@ import {
   X,
 } from 'lucide-react';
 import { INITIAL_TRACKS, SEARCH_CATALOG, formatTime } from '../data/mockTracks';
+import { resolveNowPlayingDurationSec } from '../utils/playbackSync';
 import { useRoom } from '../context/RoomContext';
 import { searchMusicBackend } from '../services/apiClient';
 import { resolveYouTubeTrack, searchRealSongs } from '../utils/artworkApi';
@@ -59,12 +60,22 @@ const THEME_PILL_COLORS = {
 
 const REACTION_EMOJIS = ['❤️', '🔥', '🎵', '😊', '✨', '😭'];
 
+// R2(b): queue:add failures where the socket is simply not adopted (yet) —
+// the server rejected the command before room:reconnect re-established
+// membership. These are transient, never a statement about the participant,
+// so the add is retried once and the raw lookup error is never shown.
+const MEMBERSHIP_ERROR_CODES = ['NOT_IN_ROOM', 'PARTICIPANT_NOT_FOUND', 'UNAUTHORIZED'];
+
 export default function RoomView({ isDemo = false, onLeave, demoTrack = null, demoState = null, onDemoStateChange }) {
   const {
     roomState,
     session,
     myParticipant,
     partnerParticipant,
+    // R3: derived presence from RoomContext (server flag + recent partner
+    // traffic). Falls back to the raw server flag for hand-built contexts
+    // that do not provide it.
+    partnerConnected: ctxPartnerConnected,
     currentTrack: realTrack,
     connectionStatus,
     roomError,
@@ -90,6 +101,10 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
     setVolume: ctxSetVolume,
     toggleMute: ctxToggleMute,
     syncStatus: ctxSyncStatus,
+    // R4: this tab's local player state — the ground truth for the Play/Pause
+    // button. May be undefined with an older context value; every use below
+    // falls back to the server playback state.
+    playerState: ctxPlayerState,
     getCurrentPositionMs,
     clearRoomError,
   } = useRoom();
@@ -234,10 +249,27 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
     ? `demo-${demoIdx}`
     : roomState?.currentQueueItemId;
 
+  // R4: the Play/Pause icon follows the LOCAL player, not the server's
+  // playback flag, which lagged in the live test (guest showed "Paused"
+  // while playing). 'buffering' counts as playing — the video is on its way
+  // and Pause is the honest action. With no live local state yet
+  // (idle / ready / context without playerState), fall back to the server.
+  const serverPlaying = !isDemo && roomState?.playback?.playbackState === 'playing';
   const isPlaying = isDemo
     ? demoPlaying
-    : roomState?.playback?.playbackState === 'playing';
-  const durationSec = currentTrack?.durationSec || Math.round((roomState?.playback?.durationMs || 0) / 1000) || 1;
+    : ctxPlayerState === 'playing' || ctxPlayerState === 'buffering'
+      ? true
+      : ctxPlayerState === 'paused' || ctxPlayerState === 'ended'
+        ? false
+        : serverPlaying;
+  // R5 + flicker: prefer the server playback duration (set atomically with
+  // the track on every change) over the track's stored durationSec — the
+  // UI's currentTrack still points at the PREVIOUS track until queue:updated
+  // lands, so durationSec flashed the old track's length after each switch.
+  const durationSec = resolveNowPlayingDurationSec({
+    trackDurationSec: currentTrack?.durationSec,
+    playbackDurationMs: roomState?.playback?.durationMs,
+  });
   const currentSec = isDemo
     ? demoTime
     : Math.round((syncMetrics.reportedPositionMs || 0) / 1000);
@@ -247,6 +279,10 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
   // M4: the room theme comes from roomState.settings.theme (server truth),
   // so it survives a refresh instead of reverting to the dark default.
   const theme = isDemo ? demoTheme : roomState?.settings?.theme || 'midnight';
+  // R3: presence shown for the partner. Prefer the derived value from the
+  // context (live socket state + recent partner traffic); the raw server
+  // flag is only a fallback for contexts that do not provide it.
+  const partnerConnected = ctxPartnerConnected ?? partnerParticipant?.connected ?? false;
 
   // Initialize real player adapter when source or room changes
   useEffect(() => {
@@ -455,14 +491,31 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
         }
       }
       if (isPlaying) {
-        await sendCommand('player:pause', { positionMs: Math.round(posMs) });
+        await Promise.race([
+          sendCommand('player:pause', { positionMs: Math.round(posMs) }),
+          // R1/R4: the command ack can take up to 60s on a flaky socket —
+          // never let the button spin on "Loading…" that long. The room
+          // state update (or the effect below, when playback actually
+          // starts) clears the spinner; the raced command still runs and
+          // still reports its own error.
+          new Promise((resolve) => setTimeout(resolve, 3000)),
+        ]);
       } else {
-        await sendCommand('player:play', { positionMs: Math.round(posMs), scheduleLeadMs: 250 });
+        await Promise.race([
+          sendCommand('player:play', { positionMs: Math.round(posMs), scheduleLeadMs: 250 }),
+          new Promise((resolve) => setTimeout(resolve, 3000)),
+        ]);
       }
     } finally {
       setPlayLoading(false);
     }
   };
+
+  // R4: the loading state must clear as soon as playback actually starts —
+  // not when the (possibly 60s) command ack eventually returns.
+  useEffect(() => {
+    if (isPlaying) setPlayLoading(false);
+  }, [isPlaying]);
 
   // m2: Resync with a brief confirmation.
   const handleResync = async () => {
@@ -628,11 +681,46 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
         return;
       }
     }
-    const res = await sendCommand('queue:add', { track: trackPayload });
+    // R2(a/b): a guest add can fail for two very different reasons, and the
+    // user must never see the misleading 'Participant not found' text.
+    // - GUEST_QUEUE_DISABLED: the host turned guest adds off — say so honestly.
+    // - Membership codes: the socket is not adopted (yet). socket.io flushes
+    //   buffered emits BEFORE the connect handler re-adopts the socket via
+    //   room:reconnect, so an add sent during a reconnect can land first.
+    //   Retry once after a pause; if it still fails, show a neutral retry
+    //   message. (sendCommand already put the raw error in the banner, so
+    //   clear it whenever we show our own message instead.)
+    let res = await sendCommand('queue:add', { track: trackPayload });
     if (res?.ok) {
       setDedication('');
       setActiveTab('queue');
       showToast('Added to queue');
+      return;
+    }
+    if (res?.code === 'GUEST_QUEUE_DISABLED') {
+      setRoomError(null);
+      setSearchError('Guest queue additions are disabled by the host');
+      return;
+    }
+    if (res && MEMBERSHIP_ERROR_CODES.includes(res.code)) {
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      res = await sendCommand('queue:add', { track: trackPayload });
+      if (res?.ok) {
+        setDedication('');
+        setActiveTab('queue');
+        showToast('Added to queue');
+        return;
+      }
+      if (res?.code === 'GUEST_QUEUE_DISABLED') {
+        setRoomError(null);
+        setSearchError('Guest queue additions are disabled by the host');
+        return;
+      }
+      if (res && MEMBERSHIP_ERROR_CODES.includes(res.code)) {
+        setRoomError(null);
+        setSearchError('Still reconnecting to the room — please try adding again in a moment.');
+      }
+      // Any other failure keeps the banner error sendCommand already set.
     }
   };
 
@@ -884,7 +972,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
 
       {/* m1/m2: confirmation toast (copy code, resync, remove, add) */}
       {toast && (
-        <div className="fixed bottom-6 left-1/2 z-[70] -translate-x-1/2 rounded-full border border-white/10 bg-zinc-900/95 px-4 py-2 text-xs font-semibold text-white shadow-2xl backdrop-blur-md">
+        <div className="fixed bottom-6 left-1/2 z-[70] max-w-[calc(100vw-2rem)] -translate-x-1/2 rounded-full border border-white/10 bg-zinc-900/95 px-4 py-2 text-center text-xs font-semibold text-white shadow-2xl backdrop-blur-md">
           {toast}
         </div>
       )}
@@ -1548,10 +1636,10 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                           <span className="rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-bold text-zinc-300 uppercase">
                             {partnerParticipant.source}
                           </span>
-                          <span className={`h-2 w-2 rounded-full ${partnerParticipant.connected ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+                          <span className={`h-2 w-2 rounded-full ${partnerConnected ? 'bg-emerald-500' : 'bg-amber-500'}`} />
                         </div>
                         <p className="mt-0.5 text-xs text-zinc-500">
-                          {partnerParticipant.connected
+                          {partnerConnected
                             ? `${partnerParticipant.ready ? 'Ready' : 'Loading'} • Reported ${formatTime(
                                 Math.round((partnerParticipant.reportedPositionMs || 0) / 1000)
                               )}`
@@ -1684,7 +1772,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                           onClick={() => handleAddTrack(track)}
                           className="inline-flex shrink-0 items-center gap-1 rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-zinc-950 hover:bg-zinc-200 cursor-pointer"
                         >
-                          <Plus className="h-3 w-3" /> Add
+                          <Plus className="h-3 w-3" /> Add to Queue
                         </button>
                       </div>
                     ))}

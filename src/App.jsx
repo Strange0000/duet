@@ -21,13 +21,23 @@ function LoadingFallback() {
 }
 
 /* ——— PWA Install Prompt ——— */
+// R7(a): the banner must not overlay room controls. It is rendered only on
+// the landing / room-not-found screens (see DuetAppShell below), never
+// inside a room view — so it unmounts when a room opens. The deferred
+// prompt and the dismissed flag are cached at module scope so the banner
+// can come back on the landing page after leaving a room (the
+// beforeinstallprompt event only fires once per page load).
+let cachedInstallPrompt = null;
+let installBannerDismissed = false;
+
 function PWAInstallBanner() {
-  const [deferredPrompt, setDeferredPrompt] = useState(null);
-  const [dismissed, setDismissed] = useState(false);
+  const [deferredPrompt, setDeferredPrompt] = useState(() => cachedInstallPrompt);
+  const [dismissed, setDismissed] = useState(() => installBannerDismissed);
 
   useEffect(() => {
     const handler = (e) => {
       e.preventDefault();
+      cachedInstallPrompt = e;
       setDeferredPrompt(e);
     };
     window.addEventListener('beforeinstallprompt', handler);
@@ -36,13 +46,19 @@ function PWAInstallBanner() {
 
   if (!deferredPrompt || dismissed) return null;
 
+  const dismiss = () => {
+    installBannerDismissed = true;
+    setDismissed(true);
+  };
+
   const handleInstall = async () => {
     deferredPrompt.prompt();
     const result = await deferredPrompt.userChoice;
     if (result.outcome === 'accepted') {
+      cachedInstallPrompt = null;
       setDeferredPrompt(null);
     }
-    setDismissed(true);
+    dismiss();
   };
 
   return (
@@ -58,7 +74,7 @@ function PWAInstallBanner() {
           <p className="mt-0.5 text-xs text-zinc-400">Add to your home screen for the best experience — instant launch, fullscreen, home-screen icon.</p>
         </div>
         <button
-          onClick={() => setDismissed(true)}
+          onClick={dismiss}
           className="shrink-0 text-zinc-500 hover:text-white cursor-pointer"
           aria-label="Dismiss"
         >
@@ -67,7 +83,7 @@ function PWAInstallBanner() {
       </div>
       <div className="mt-3 flex gap-2">
         <button
-          onClick={() => setDismissed(true)}
+          onClick={dismiss}
           className="flex-1 rounded-full border border-white/10 bg-white/5 py-2 text-xs font-semibold text-zinc-300 hover:bg-white/10 cursor-pointer"
         >
           Not now
@@ -338,27 +354,35 @@ function DuetAppShell() {
 
   if (roomNotFound) {
     return (
-      <RoomNotFoundScreen
-        code={roomNotFound}
-        onCreateRoom={handleCreateRoom}
-        onJoinRoom={handleJoinRoom}
-        roomLoading={roomLoading}
-      />
+      <>
+        <RoomNotFoundScreen
+          code={roomNotFound}
+          onCreateRoom={handleCreateRoom}
+          onJoinRoom={handleJoinRoom}
+          roomLoading={roomLoading}
+        />
+        {/* R7(a): banner is fine here — this is not a room view. */}
+        <PWAInstallBanner />
+      </>
     );
   }
 
   return (
-    <Suspense fallback={<LoadingFallback />}>
-      <LandingPage
-        onCreateRoom={handleCreateRoom}
-        onJoinRoom={handleJoinRoom}
-        onOpenDemo={handleOpenDemo}
-        lastRoomCode={lastRoomCode}
-        roomLoading={roomLoading}
-        roomError={spotifyCallbackError || roomError}
-        pendingApproval={pendingApproval}
-      />
-    </Suspense>
+    <>
+      <Suspense fallback={<LoadingFallback />}>
+        <LandingPage
+          onCreateRoom={handleCreateRoom}
+          onJoinRoom={handleJoinRoom}
+          onOpenDemo={handleOpenDemo}
+          lastRoomCode={lastRoomCode}
+          roomLoading={roomLoading}
+          roomError={spotifyCallbackError || roomError}
+          pendingApproval={pendingApproval}
+        />
+      </Suspense>
+      {/* R7(a): banner is fine here — this is not a room view. */}
+      <PWAInstallBanner />
+    </>
   );
 }
 
@@ -366,7 +390,6 @@ export default function App() {
   return (
     <RoomProvider>
       <DuetAppShell />
-      <PWAInstallBanner />
     </RoomProvider>
   );
 }

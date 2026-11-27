@@ -220,6 +220,9 @@ export class SpotifyPlayer extends BasePlayer {
     }
 
     this.currentUri = uri;
+    // R5: the previous track's duration stays in lastDurationMs until the
+    // SDK reports the new track's state — never report it as this track's.
+    this.lastDurationMs = 0;
     this.lastPositionMs = startPositionMs;
     this.lastUpdateMono = performance.now();
 
@@ -343,5 +346,6 @@ export class SpotifyPlayer extends BasePlayer {
     this.deviceId = null;
     this.isReady = false;
     this.currentUri = null;
+    this.lastDurationMs = 0;
   }
 }
