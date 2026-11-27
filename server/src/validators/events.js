@@ -6,7 +6,7 @@ export const roomCodeSchema = z
   .toUpperCase()
   .regex(/^[A-Z2-9]{6}$/, 'Room code must be 6 valid characters');
 
-export const sourceSchema = z.enum(['youtube', 'local', 'spotify']);
+export const sourceSchema = z.enum(['youtube', 'audio', 'local', 'spotify']);
 
 export const trackSchema = z.object({
   id: z.string().min(1).max(128),

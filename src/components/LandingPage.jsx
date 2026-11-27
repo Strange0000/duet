@@ -208,7 +208,7 @@ export default function LandingPage({
                 }`}
               >
                 <span className={`h-2 w-2 rounded-full ${connectedSource === 'youtube' ? 'bg-red-500' : 'bg-violet-400'}`} />
-                {connectedSource === 'youtube' ? 'YouTube' : 'Test Audio'}
+                {connectedSource === 'youtube' ? 'YouTube' : 'Audio Only'}
                 <ChevronDown className={`h-3.5 w-3.5 transition-transform ${connectOpen ? 'rotate-180' : ''}`} />
               </button>
 
@@ -235,22 +235,22 @@ export default function LandingPage({
                     </div>
                   </button>
 
-                  {/* Local Fixture option */}
+                  {/* Audio Only option */}
                   <button
-                    onClick={() => { setConnectedSource('local'); setConnectOpen(false); }}
+                    onClick={() => { setConnectedSource('audio'); setConnectOpen(false); }}
                     className={`flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left transition cursor-pointer ${
-                      connectedSource === 'local' ? 'bg-violet-500/10' : 'hover:bg-white/5'
+                      connectedSource === 'audio' ? 'bg-violet-500/10' : 'hover:bg-white/5'
                     }`}
                   >
                     <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-violet-600 text-white shadow">
-                      <Music className="h-5 w-5" />
+                      <Headphones className="h-5 w-5" />
                     </span>
                     <div className="flex-1">
                       <div className="flex items-center justify-between">
-                        <span className="text-sm font-bold text-white">Local Test Audio</span>
-                        {connectedSource === 'local' && <span className="rounded-full bg-violet-500/20 px-2 py-0.5 text-[10px] font-bold text-violet-300">Active</span>}
+                        <span className="text-sm font-bold text-white">Audio Only</span>
+                        {connectedSource === 'audio' && <span className="rounded-full bg-violet-500/20 px-2 py-0.5 text-[10px] font-bold text-violet-300">Active</span>}
                       </div>
-                      <p className="mt-0.5 text-xs text-zinc-500">Built-in synth fixture for sync tests</p>
+                      <p className="mt-0.5 text-xs text-zinc-500">Music without video • Background play</p>
                     </div>
                   </button>
 

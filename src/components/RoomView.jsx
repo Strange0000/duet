@@ -1012,12 +1012,12 @@ export default function RoomView({ isDemo = false, onLeave }) {
                     YouTube
                   </button>
                   <button
-                    onClick={() => handleSourceSwitch('local')}
+                    onClick={() => handleSourceSwitch('audio')}
                     className={`flex-1 rounded-full px-2.5 py-1.5 text-center text-xs font-semibold transition sm:flex-none sm:px-3.5 cursor-pointer ${
-                      mySource === 'local' ? 'bg-violet-600 text-white' : 'text-zinc-400 hover:text-white'
+                      mySource === 'audio' || mySource === 'local' ? 'bg-violet-600 text-white' : 'text-zinc-400 hover:text-white'
                     }`}
                   >
-                    Test Audio
+                    Audio Only
                   </button>
                   <button
                     disabled
@@ -1029,34 +1029,43 @@ export default function RoomView({ isDemo = false, onLeave }) {
                 </div>
               </div>
 
-              {/* Player Stage: Visible YouTube IFrame OR Local Audio Visualizer */}
+              {/* Player Stage: Visible YouTube IFrame OR Audio-Only Visualizer */}
               {currentTrack && (
-                <div className="mt-6 space-y-5">
-                  {!isDemo && mySource === 'youtube' ? (
-                    <div className="overflow-hidden rounded-2xl border border-white/10 bg-black">
+                <div className="relative mt-6 space-y-5">
+                  {!isDemo && (mySource === 'youtube' || mySource === 'audio') && (
+                    <div
+                      className={
+                        mySource === 'youtube'
+                          ? 'overflow-hidden rounded-2xl border border-white/10 bg-black'
+                          : 'pointer-events-none absolute inset-0 -z-10 overflow-hidden opacity-0'
+                      }
+                      aria-hidden={mySource !== 'youtube'}
+                    >
                       <div ref={ytContainerRef} className="aspect-video w-full" />
                     </div>
-                  ) : (
+                  )}
+
+                  {(isDemo || mySource !== 'youtube') && (
                     <div className="flex flex-col items-center gap-6 sm:flex-row">
-                      <div className="relative h-44 w-44 shrink-0 overflow-hidden rounded-2xl shadow-2xl sm:h-48 sm:w-48">
-                        {mySource === 'local' && !isDemo ? (
-                          <AudioVisualizerCanvas
-                            isPlaying={isPlaying}
-                            accentColor={currentTrack.accentColor || '#7c3aed'}
-                            secondaryColor={currentTrack.secondaryColor || '#f43f5e'}
-                            coverImage={currentTrack.coverImage}
-                            className="h-full w-full"
-                          />
-                        ) : currentTrack.coverImage ? (
-                          <img src={currentTrack.coverImage} alt={currentTrack.title} className="h-full w-full object-cover" />
-                        ) : (
-                          <div className={`flex h-full w-full items-center justify-center bg-gradient-to-br ${currentTrack.coverGradient || 'from-violet-600 to-rose-500'} text-white`}>
+                      <div className="relative h-44 w-44 shrink-0 overflow-hidden rounded-2xl shadow-2xl ring-1 ring-white/10 sm:h-48 sm:w-48">
+                        <AudioVisualizerCanvas
+                          isPlaying={isPlaying}
+                          accentColor={currentTrack.accentColor || (THEME_STYLES[theme] || THEME_STYLES.midnight).accent}
+                          secondaryColor={currentTrack.secondaryColor || '#f43f5e'}
+                          coverImage={currentTrack.coverImage}
+                          className="h-full w-full"
+                        />
+                        {!currentTrack.coverImage && (
+                          <div className={`pointer-events-none absolute inset-0 flex items-center justify-center bg-gradient-to-br ${currentTrack.coverGradient || 'from-violet-600/40 to-rose-500/40'} text-white`}>
                             <Disc3 className={`h-16 w-16 opacity-90 ${isPlaying ? 'animate-rotate-disc' : ''}`} />
                           </div>
                         )}
                       </div>
 
                       <div className="w-full flex-1 text-center sm:text-left">
+                        <span className="mb-2 inline-flex items-center gap-1.5 rounded-full border border-violet-500/30 bg-violet-500/15 px-2.5 py-0.5 text-[10px] font-bold tracking-wider text-violet-300 uppercase">
+                          <Volume2 className="h-3 w-3" /> Audio Only &middot; Background Play
+                        </span>
                         <h2 className="font-display text-2xl font-bold tracking-tight text-white sm:text-3xl">
                           {currentTrack.title}
                         </h2>
@@ -1211,7 +1220,7 @@ export default function RoomView({ isDemo = false, onLeave }) {
 
                 {isDemo && (
                   <button
-                    onClick={() => setDemoPartnerSource((s) => (s === 'youtube' ? 'local' : 'youtube'))}
+                    onClick={() => setDemoPartnerSource((s) => (s === 'youtube' ? 'audio' : 'youtube'))}
                     className="rounded-full border border-white/10 bg-white/5 px-3.5 py-1.5 text-xs font-semibold text-zinc-300 hover:bg-white/10 cursor-pointer"
                   >
                     Switch Source

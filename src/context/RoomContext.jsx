@@ -11,6 +11,7 @@ import { INITIAL_TRACKS } from '../data/mockTracks';
 import { LocalAudioPlayer } from '../players/LocalAudioPlayer';
 import { YouTubePlayer } from '../players/YouTubePlayer';
 import { emitAck, generateCommandId, getSocket } from '../services/socketClient';
+import { backgroundAudio } from '../utils/backgroundAudio';
 import { ClockSync } from '../utils/clockSync';
 import { computeExpectedPositionMs, evaluateDriftCorrection } from '../utils/playbackSync';
 
@@ -130,6 +131,9 @@ export function RoomProvider({ children }) {
 
       if (!audioUnlockedRef.current) return;
 
+      backgroundAudio.updateMetadata(track);
+      await backgroundAudio.setPlaying(playback.playbackState === 'playing');
+
       if (playback.playbackState === 'playing') {
         const delayMs =
           typeof playback.effectiveAtServerMs === 'number'
@@ -162,6 +166,18 @@ export function RoomProvider({ children }) {
   // Initialize / switch player adapter when source or container changes
   const initPlayerForSource = useCallback(
     async (source, containerEl) => {
+      const wantsYouTube = source === 'youtube' || source === 'audio';
+
+      // Seamless switch between YouTube (video) and Audio Only without interrupting playback
+      if (
+        wantsYouTube &&
+        playerRef.current instanceof YouTubePlayer &&
+        containerEl &&
+        playerRef.current.containerEl === containerEl
+      ) {
+        return;
+      }
+
       if (playerRef.current) {
         await playerRef.current.destroy();
         playerRef.current = null;
@@ -172,7 +188,7 @@ export function RoomProvider({ children }) {
         setPlayerError({
           code: 'PROVIDER_UNAVAILABLE',
           message:
-            'Spotify playback is unavailable pending developer policy authorization. Switch to YouTube or Local Test Audio.',
+            'Spotify playback is unavailable pending developer policy authorization. Switch to YouTube or Audio Only.',
         });
         return;
       }
@@ -184,6 +200,20 @@ export function RoomProvider({ children }) {
           }
         },
         onStateChange: (state) => {
+          if (
+            state === 'paused' &&
+            typeof document !== 'undefined' &&
+            document.hidden &&
+            roomStateRef.current?.playback?.playbackState === 'playing' &&
+            audioUnlockedRef.current
+          ) {
+            // Keep audio playing when the mobile browser is minimized or backgrounded
+            setTimeout(() => {
+              if (roomStateRef.current?.playback?.playbackState === 'playing') {
+                playerRef.current?.play().catch(() => {});
+              }
+            }, 80);
+          }
           if (sessionRef.current) {
             emitAck('player:status', { buffering: state === 'buffering' }).catch(() => {});
           }
@@ -201,10 +231,9 @@ export function RoomProvider({ children }) {
         },
       };
 
-      const adapter =
-        source === 'youtube' ? new YouTubePlayer(callbacks) : new LocalAudioPlayer(callbacks);
+      const adapter = wantsYouTube ? new YouTubePlayer(callbacks) : new LocalAudioPlayer(callbacks);
 
-      if (source === 'youtube' && !containerEl) return;
+      if (wantsYouTube && !containerEl) return;
 
       try {
         await adapter.initialize(containerEl);
@@ -513,6 +542,7 @@ export function RoomProvider({ children }) {
       playerRef.current = null;
       loadedTrackKeyRef.current = null;
     }
+    backgroundAudio.destroy();
     clearSession();
     setSession(null);
     setRoomState(null);
@@ -523,6 +553,7 @@ export function RoomProvider({ children }) {
   const unlockAudio = useCallback(async () => {
     setAudioUnlocked(true);
     audioUnlockedRef.current = true;
+    await backgroundAudio.unlock();
     const player = playerRef.current;
     if (player && typeof player.initialize === 'function' && myParticipant?.source === 'local') {
       await player.initialize();
@@ -545,6 +576,68 @@ export function RoomProvider({ children }) {
     }
     return res;
   }, []);
+
+  // Wire OS lock-screen / MediaSession controls & visibility re-sync for background playback
+  useEffect(() => {
+    if (!roomState) return;
+    const canControl =
+      session?.role === 'host' || Boolean(roomState?.settings?.allowGuestControl);
+
+    backgroundAudio.updateMetadata(currentTrack);
+    backgroundAudio.setPlaying(roomState.playback?.playbackState === 'playing');
+    backgroundAudio.setActionHandlers({
+      onPlay: () => {
+        if (canControl) {
+          sendCommand('player:play', {
+            positionMs: syncMetrics.reportedPositionMs || 0,
+            scheduleLeadMs: 250,
+          });
+        } else {
+          playerRef.current?.play().catch(() => {});
+        }
+      },
+      onPause: () => {
+        if (canControl) {
+          sendCommand('player:pause', { positionMs: syncMetrics.reportedPositionMs || 0 });
+        } else {
+          playerRef.current?.pause().catch(() => {});
+        }
+      },
+      onPrevious: () => {
+        if (canControl) sendCommand('player:previous', {});
+      },
+      onNext: () => {
+        if (canControl) sendCommand('player:next', {});
+      },
+      onSeekTo: (seekSec) => {
+        if (canControl) sendCommand('player:seek', { positionMs: Math.round(seekSec * 1000) });
+      },
+    });
+  }, [
+    roomState,
+    session?.role,
+    currentTrack,
+    sendCommand,
+    syncMetrics.reportedPositionMs,
+  ]);
+
+  useEffect(() => {
+    if (!currentTrack) return;
+    const durSec =
+      currentTrack.durationSec || Math.round((roomState?.playback?.durationMs || 0) / 1000) || 1;
+    const posSec = Math.round((syncMetrics.reportedPositionMs || 0) / 1000);
+    backgroundAudio.updatePosition(posSec, durSec);
+  }, [currentTrack, roomState?.playback?.durationMs, syncMetrics.reportedPositionMs]);
+
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (!document.hidden && roomStateRef.current?.playback && currentTrack) {
+        applyPlaybackToPlayer(roomStateRef.current.playback, currentTrack).catch(() => {});
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, [applyPlaybackToPlayer, currentTrack]);
 
   const value = {
     roomState,
