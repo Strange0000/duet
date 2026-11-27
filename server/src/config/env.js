@@ -16,7 +16,7 @@ const envSchema = z.object({
   ENABLE_SPOTIFY: z
     .string()
     .optional()
-    .default('false')
+    .default('true')
     .transform((v) => v === 'true'),
   HOST_GRACE_MS: z.coerce.number().int().min(1000).default(30000),
 });
