@@ -13,11 +13,7 @@ services:
         value: 3001
       - key: CLIENT_ORIGIN
         sync: false
-      - key: SESSION_SECRET
-        generateValue: true
       - key: YOUTUBE_API_KEY
-        sync: false
-      - key: REDIS_URL
         sync: false
       - key: ENABLE_SPOTIFY
         value: "true"

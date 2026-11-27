@@ -41,19 +41,27 @@ export function registerSocketHandlers(io, store, env) {
     socket.data.roomCode = null;
     socket.data.participantId = null;
 
-    // Simple per-socket sliding window rate limiter for room joins / pings
-    let joinAttempts = 0;
-    let lastJoinReset = Date.now();
-
-    const checkJoinRateLimit = () => {
-      const now = Date.now();
-      if (now - lastJoinReset > 60000) {
-        joinAttempts = 0;
-        lastJoinReset = now;
-      }
-      joinAttempts += 1;
-      return joinAttempts <= 15;
+    // Simple per-socket sliding window rate limiters (per minute).
+    // Joins were already limited; room creation, chat and reactions were not.
+    const makeRateLimiter = (limit) => {
+      let attempts = 0;
+      let lastReset = Date.now();
+      return () => {
+        const now = Date.now();
+        if (now - lastReset > 60000) {
+          attempts = 0;
+          lastReset = now;
+        }
+        attempts += 1;
+        return attempts <= limit;
+      };
     };
+    const checkJoinRateLimit = makeRateLimiter(15);
+    const checkCreateRateLimit = makeRateLimiter(10);
+    const checkChatRateLimit = makeRateLimiter(30);
+    const checkReactionRateLimit = makeRateLimiter(30);
+    const rateLimited = (ack, what) =>
+      reply(ack, { ok: false, code: 'RATE_LIMITED', error: `Too many ${what}. Please wait a minute.` });
 
     const emitRoomState = (room) => {
       io.to(room.code).emit('room:state', store.serializeRoom(room));
@@ -104,6 +112,7 @@ export function registerSocketHandlers(io, store, env) {
 
     // ——— Room Lifecycle ———
     socket.on('room:create', (raw, ack) => {
+      if (!checkCreateRateLimit()) return rateLimited(ack, 'rooms created');
       const v = validate(createRoomSchema, raw);
       if (!v.ok) return reply(ack, { ok: false, error: v.error });
 
@@ -599,6 +608,7 @@ export function registerSocketHandlers(io, store, env) {
     socket.on('chat:send', (raw, ack) => {
       const ctx = requireMembership(ack);
       if (!ctx) return;
+      if (!checkChatRateLimit()) return rateLimited(ack, 'chat messages');
       const v = validate(chatSendSchema, raw);
       if (!v.ok) return reply(ack, { ok: false, error: v.error });
 
@@ -612,6 +622,7 @@ export function registerSocketHandlers(io, store, env) {
     socket.on('reaction:send', (raw, ack) => {
       const ctx = requireMembership(ack);
       if (!ctx) return;
+      if (!checkReactionRateLimit()) return rateLimited(ack, 'reactions');
       const v = validate(reactionSendSchema, raw);
       if (!v.ok) return reply(ack, { ok: false, error: v.error });
 

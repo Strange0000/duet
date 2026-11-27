@@ -54,7 +54,7 @@ const FEATURES = [
   {
     icon: Zap,
     title: 'Instant Sync',
-    body: 'Clock-compensated playback with under 20ms drift. Seek, pause, skip—both phones react instantly.',
+    body: 'Clock-compensated playback, typically within a second. Seek, pause, skip—both phones react together.',
     gradient: 'from-orange-500 to-rose-500',
   },
 ];
