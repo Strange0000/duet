@@ -481,12 +481,17 @@ export function RoomProvider({ children }) {
     };
 
     const onPlaybackState = (playback) => {
+      // B1 (root cause): this used to derive the track from
+      // roomStateRef.current and call applyPlaybackToPlayer here. But the
+      // server emits playback:state BEFORE queue:updated, so at this moment
+      // currentQueueItemId is still the PREVIOUS track while `playback`
+      // already carries the NEW trackVersion — applyPlaybackToPlayer then
+      // loaded the OLD video with the new track's position, and the player
+      // lagged one track behind forever. So this handler only updates the
+      // state; the effect below (which reads the track from the latest
+      // roomState, after queue:updated lands) is the single place that
+      // drives the player.
       setRoomState((prev) => (prev ? { ...prev, playback } : prev));
-      const st = roomStateRef.current;
-      const trk =
-        st?.queue?.find((q) => q.queueItemId === st.currentQueueItemId)?.track ||
-        st?.queue?.[0]?.track;
-      if (trk) applyPlaybackToPlayer(playback, trk);
     };
 
     const onQueueUpdated = ({ queue, currentQueueItemId }) => {
@@ -593,6 +598,16 @@ export function RoomProvider({ children }) {
       socket.off('room:closed', onRoomClosed);
     };
   }, [applyPlaybackToPlayer, runClockSync, adoptCreatedRoom]);
+
+  // B1: the single place that drives the player from the room state.
+  // Whenever the playback state or the current track changes, apply it to
+  // the player using the track read from the LATEST roomState (so a track
+  // change is never applied with a stale currentQueueItemId). This covers
+  // Next/Previous, play/pause, seek and track-end advance.
+  useEffect(() => {
+    if (!roomState?.playback || !currentTrack) return;
+    applyPlaybackToPlayer(roomState.playback, currentTrack).catch(() => {});
+  }, [applyPlaybackToPlayer, roomState?.playback, currentTrack]);
 
   // Periodic drift measurement & correction loop (every 1000ms while playing)
   useEffect(() => {

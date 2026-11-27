@@ -532,6 +532,72 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
     await sendCommand(dir > 0 ? 'player:next' : 'player:previous', {});
   };
 
+  // Paste-a-YouTube-link: extract the video ID from a pasted URL and add
+  // it directly (fetching the title from YouTube's public oEmbed endpoint).
+  // This does not depend on the backend's /api/youtube/resolve endpoint,
+  // so pasting a link works even before the PR #4 backend is deployed.
+  const extractYouTubeId = (input) => {
+    const trimmed = String(input || '').trim();
+    if (/^[A-Za-z0-9_-]{11}$/.test(trimmed)) return trimmed;
+    try {
+      const url = new URL(trimmed);
+      const host = url.hostname.replace(/^www\./, '');
+      if (host === 'youtu.be') {
+        const id = url.pathname.replace(/^\//, '').slice(0, 11);
+        return /^[A-Za-z0-9_-]{11}$/.test(id) ? id : null;
+      }
+      if (host === 'youtube.com' || host.endsWith('.youtube.com')) {
+        const v = url.searchParams.get('v');
+        if (v && /^[A-Za-z0-9_-]{11}$/.test(v)) return v;
+        const parts = url.pathname.split('/').filter(Boolean);
+        const idx = parts.findIndex((p) => p === 'shorts' || p === 'embed' || p === 'live');
+        if (idx !== -1 && parts[idx + 1] && /^[A-Za-z0-9_-]{11}$/.test(parts[idx + 1])) {
+          return parts[idx + 1];
+        }
+      }
+    } catch {
+      // Not a URL
+    }
+    return null;
+  };
+
+  const handleAddYouTubeLink = async (url) => {
+    const videoId = extractYouTubeId(url);
+    if (!videoId) return false;
+    setSearchError('');
+    // Get the title/author from YouTube's public oEmbed (no API key).
+    let title = 'YouTube Track';
+    let artist = 'YouTube';
+    let coverImage = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+    try {
+      const res = await fetch(
+        `https://www.youtube.com/oembed?url=${encodeURIComponent(
+          `https://www.youtube.com/watch?v=${videoId}`
+        )}&format=json`
+      );
+      if (res.ok) {
+        const data = await res.json();
+        title = data.title || title;
+        artist = (data.author_name || artist).replace(/\s*-\s*Topic$/i, '');
+        coverImage = data.thumbnail_url || coverImage;
+      }
+    } catch {
+      // Keep the fallback title — the video ID is what matters.
+    }
+    await handleAddTrack({
+      id: `yt-${videoId}`,
+      title,
+      artist,
+      album: 'YouTube',
+      durationSec: null,
+      coverImage,
+      youtubeId: videoId,
+      sourceAttribution: 'YouTube (oEmbed)',
+      attributionUrl: `https://www.youtube.com/watch?v=${videoId}`,
+    });
+    return true;
+  };
+
   const handleAddTrack = async (track) => {
     const trackPayload = {
       ...track,
@@ -1559,9 +1625,15 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                         // Pressing Enter adds the first result — pasting a
                         // YouTube link then hitting Enter is the main way to
                         // add a song, and previously Enter did nothing.
-                        if (e.key === 'Enter' && filteredCatalog.length > 0) {
+                        if (e.key === 'Enter') {
                           e.preventDefault();
-                          handleAddTrack(filteredCatalog[0]);
+                          // A pasted YouTube link adds directly (no waiting
+                          // for the search round-trip).
+                          handleAddYouTubeLink(searchQuery).then((added) => {
+                            if (!added && filteredCatalog.length > 0) {
+                              handleAddTrack(filteredCatalog[0]);
+                            }
+                          });
                         }
                       }}
                       placeholder="Search songs or paste YouTube URL..."
