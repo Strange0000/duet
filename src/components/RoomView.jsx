@@ -1,0 +1,1136 @@
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ArrowDown,
+  ArrowLeft,
+  ArrowUp,
+  Check,
+  Clock,
+  Copy,
+  Disc3,
+  Heart,
+  ListMusic,
+  Lock,
+  MessageCircle,
+  Palette,
+  Pause,
+  Play,
+  Plus,
+  Radio,
+  RefreshCw,
+  Search,
+  Send,
+  Settings,
+  Shield,
+  SkipBack,
+  SkipForward,
+  Smartphone,
+  Trash2,
+  Volume2,
+  X,
+} from 'lucide-react';
+import { INITIAL_TRACKS, SEARCH_CATALOG, formatTime } from '../data/mockTracks';
+import { useRoom } from '../context/RoomContext';
+import { searchMusicBackend } from '../services/apiClient';
+import { searchRealSongs } from '../utils/artworkApi';
+import AudioVisualizerCanvas from './AudioVisualizerCanvas';
+
+const THEME_STYLES = {
+  midnight: 'bg-zinc-950',
+  aurora: 'bg-gradient-to-b from-slate-950 via-emerald-950/30 to-zinc-950',
+  sunset: 'bg-gradient-to-b from-zinc-950 via-rose-950/30 to-zinc-950',
+  rose: 'bg-gradient-to-b from-zinc-950 via-pink-950/25 to-zinc-950',
+  ocean: 'bg-gradient-to-b from-slate-950 via-sky-950/30 to-zinc-950',
+  minimal: 'bg-black',
+};
+
+const REACTION_EMOJIS = ['❤️', '🔥', '🎵', '😊', '✨', '😭'];
+
+export default function RoomView({ isDemo = false, onLeave }) {
+  const {
+    roomState,
+    session,
+    myParticipant,
+    partnerParticipant,
+    currentTrack: realTrack,
+    connectionStatus,
+    roomError,
+    playerError,
+    audioUnlocked: realAudioUnlocked,
+    syncMetrics,
+    reactions,
+    unreadChatCount,
+    setUnreadChatCount,
+    partnerTyping,
+    initPlayerForSource,
+    unlockAudio,
+    runClockSync,
+    sendCommand,
+    leaveRoom,
+    setPlayerError,
+  } = useRoom();
+
+  // ——— Demo Mode Fallback State (only used when isDemo === true) ———
+  const [demoRole, setDemoRole] = useState('host');
+  const [demoSource, setDemoSource] = useState('local');
+  const [demoPartnerSource, setDemoPartnerSource] = useState('youtube');
+  const [demoUnlocked, setDemoUnlocked] = useState(true);
+  const [demoQueue, setDemoQueue] = useState(INITIAL_TRACKS);
+  const [demoIdx, setDemoIdx] = useState(0);
+  const [demoPlaying, setDemoPlaying] = useState(true);
+  const [demoTime, setDemoTime] = useState(102);
+
+  useEffect(() => {
+    if (!isDemo || !demoPlaying) return;
+    const t = setInterval(() => {
+      setDemoTime((p) => {
+        const dur = demoQueue[demoIdx]?.durationSec || 200;
+        if (p + 1 >= dur) {
+          setDemoIdx((i) => (i + 1) % demoQueue.length);
+          return 0;
+        }
+        return p + 1;
+      });
+    }, 1000);
+    return () => clearInterval(t);
+  }, [isDemo, demoPlaying, demoIdx, demoQueue]);
+
+  // ——— Shared UI State ———
+  const [copied, setCopied] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
+  const [activeTab, setActiveTab] = useState('queue'); // 'queue' | 'search' | 'chat'
+  const [searchQuery, setSearchQuery] = useState('');
+  const [dedication, setDedication] = useState('');
+  const [liveResults, setLiveResults] = useState([]);
+  const [youtubeApiConfigured, setYoutubeApiConfigured] = useState(true);
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchError, setSearchError] = useState('');
+  const [chatText, setChatText] = useState('');
+  const [showSettings, setShowSettings] = useState(false);
+  const [showMetrics, setShowMetrics] = useState(false);
+  const [showPrivacy, setShowPrivacy] = useState(false);
+  const [showSessionSummary, setShowSessionSummary] = useState(false);
+  const chatTypingTimerRef = useRef(null);
+
+  const ytContainerRef = useRef(null);
+
+  // Derived active values
+  const roomCode = isDemo ? 'DEMO-K7' : roomState?.roomCode || '------';
+  const isHost = isDemo ? demoRole === 'host' : session?.role === 'host';
+  const mySource = isDemo ? demoSource : myParticipant?.source || 'youtube';
+  const audioUnlocked = isDemo ? demoUnlocked : realAudioUnlocked;
+  const currentTrack = isDemo ? demoQueue[demoIdx] || demoQueue[0] : realTrack;
+  const queue = isDemo
+    ? demoQueue.map((t, i) => ({ queueItemId: `demo-${i}`, track: t, addedByName: 'Demo' }))
+    : roomState?.queue || [];
+  const currentQueueItemId = isDemo
+    ? `demo-${demoIdx}`
+    : roomState?.currentQueueItemId;
+
+  const isPlaying = isDemo
+    ? demoPlaying
+    : roomState?.playback?.playbackState === 'playing';
+  const durationSec = currentTrack?.durationSec || Math.round((roomState?.playback?.durationMs || 0) / 1000) || 1;
+  const currentSec = isDemo
+    ? demoTime
+    : Math.round((syncMetrics.reportedPositionMs || 0) / 1000);
+  const theme = isDemo ? 'midnight' : roomState?.settings?.theme || 'midnight';
+
+  // Initialize real player adapter when source or room changes
+  useEffect(() => {
+    if (isDemo || !roomState) return;
+    initPlayerForSource(mySource, ytContainerRef.current);
+  }, [isDemo, mySource, Boolean(roomState), initPlayerForSource]);
+
+  // Clear unread chat count when opening chat tab
+  useEffect(() => {
+    if (activeTab === 'chat') setUnreadChatCount(0);
+  }, [activeTab, setUnreadChatCount]);
+
+  // Debounced search
+  useEffect(() => {
+    const q = searchQuery.trim();
+    if (q.length < 2) {
+      setLiveResults([]);
+      setIsSearching(false);
+      setSearchError('');
+      return;
+    }
+
+    const controller = new AbortController();
+    setIsSearching(true);
+    setSearchError('');
+
+    const timer = setTimeout(async () => {
+      try {
+        if (isDemo) {
+          const items = await searchRealSongs(q, 8);
+          setLiveResults(items);
+        } else {
+          const data = await searchMusicBackend(q, controller.signal);
+          setLiveResults(data.items || []);
+          setYoutubeApiConfigured(data.youtubeConfigured !== false);
+          if (data.error) setSearchError(data.error);
+        }
+      } catch (err) {
+        if (err.name !== 'AbortError') {
+          try {
+            const fallback = await searchRealSongs(q, 8);
+            setLiveResults(fallback);
+          } catch {
+            setSearchError('Search unavailable right now.');
+          }
+        }
+      } finally {
+        setIsSearching(false);
+      }
+    }, 350);
+
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [searchQuery, isDemo]);
+
+  const filteredCatalog = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return SEARCH_CATALOG;
+    if (liveResults.length > 0) return liveResults;
+    return SEARCH_CATALOG.filter(
+      (t) => t.title.toLowerCase().includes(q) || t.artist.toLowerCase().includes(q)
+    );
+  }, [searchQuery, liveResults]);
+
+  const handleCopyCode = () => {
+    navigator.clipboard?.writeText(roomCode).catch(() => {});
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1800);
+  };
+
+  const handleCopyInviteLink = () => {
+    const link = `${window.location.origin}/room/${roomCode}`;
+    navigator.clipboard?.writeText(link).catch(() => {});
+    setCopiedLink(true);
+    setTimeout(() => setCopiedLink(false), 1800);
+  };
+
+  const handleLeaveClick = async () => {
+    setShowSessionSummary(true);
+  };
+
+  const confirmLeave = async () => {
+    setShowSessionSummary(false);
+    if (!isDemo) {
+      await leaveRoom();
+    }
+    onLeave();
+  };
+
+  const handleSourceSwitch = async (nextSource) => {
+    if (isDemo) {
+      setDemoSource(nextSource);
+      return;
+    }
+    await sendCommand('participant:update', { source: nextSource });
+  };
+
+  const handlePlayPause = async () => {
+    if (!isHost) return;
+    if (isDemo) {
+      setDemoPlaying((p) => !p);
+      return;
+    }
+    if (isPlaying) {
+      await sendCommand('player:pause', { positionMs: currentSec * 1000 });
+    } else {
+      await sendCommand('player:play', { positionMs: currentSec * 1000, scheduleLeadMs: 250 });
+    }
+  };
+
+  const handleSeek = async (e) => {
+    if (!isHost) return;
+    const sec = Number(e.target.value);
+    if (isDemo) {
+      setDemoTime(sec);
+      return;
+    }
+    await sendCommand('player:seek', { positionMs: sec * 1000 });
+  };
+
+  const handleStep = async (dir) => {
+    if (!isHost) return;
+    if (isDemo) {
+      setDemoIdx((i) => (i + dir + demoQueue.length) % demoQueue.length);
+      setDemoTime(0);
+      return;
+    }
+    await sendCommand(dir > 0 ? 'player:next' : 'player:previous', {});
+  };
+
+  const handleAddTrack = async (track) => {
+    const trackPayload = {
+      ...track,
+      dedication: dedication.trim() || undefined,
+    };
+    if (isDemo) {
+      setDemoQueue((prev) => [...prev, trackPayload]);
+      setDedication('');
+      setActiveTab('queue');
+      return;
+    }
+    const res = await sendCommand('queue:add', { track: trackPayload });
+    if (res?.ok) {
+      setDedication('');
+      setActiveTab('queue');
+    }
+  };
+
+  const handleChatInputChange = (e) => {
+    setChatText(e.target.value);
+    // Send typing indicator (throttled to once per 2s)
+    if (!isDemo && !chatTypingTimerRef.current) {
+      sendCommand('chat:typing', {}).catch(() => {});
+      chatTypingTimerRef.current = setTimeout(() => {
+        chatTypingTimerRef.current = null;
+      }, 2000);
+    }
+  };
+
+  const handleSendChat = async (e) => {
+    e.preventDefault();
+    const txt = chatText.trim();
+    if (!txt || isDemo) return;
+    setChatText('');
+    await sendCommand('chat:send', { text: txt });
+  };
+
+  const handleClearQueue = async () => {
+    if (isDemo) {
+      setDemoQueue([]);
+      setDemoIdx(0);
+      return;
+    }
+    await sendCommand('queue:clear', {});
+  };
+
+  // Session duration
+  const sessionStartMs = isDemo ? Date.now() - 300000 : roomState?.createdAtMs;
+  const sessionDurationSec = sessionStartMs ? Math.max(0, Math.floor((Date.now() - sessionStartMs) / 1000)) : 0;
+  const sessionDurationStr = `${Math.floor(sessionDurationSec / 60)}m ${sessionDurationSec % 60}s`;
+  const tracksPlayedCount = isDemo ? demoIdx + 1 : roomState?.stats?.tracksPlayed || 0;
+
+  const handleSendReaction = async (emoji) => {
+    if (isDemo) return;
+    await sendCommand('reaction:send', { emoji });
+  };
+
+  const progressPct = Math.min(100, (currentSec / Math.max(1, durationSec)) * 100);
+
+  return (
+    <div className={`min-h-screen text-white transition-colors duration-700 ${THEME_STYLES[theme] || THEME_STYLES.midnight}`}>
+      {/* Session Summary Modal */}
+      {showSessionSummary && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="mx-4 w-full max-w-sm rounded-3xl border border-white/10 bg-zinc-900 p-6 shadow-2xl">
+            <div className="text-center">
+              <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-violet-600/20 text-violet-400">
+                <Clock className="h-6 w-6" />
+              </div>
+              <h3 className="mt-4 font-display text-xl font-bold text-white">Session Summary</h3>
+              <p className="mt-1 text-sm text-zinc-400">Room {roomCode}</p>
+            </div>
+            <div className="mt-5 space-y-3">
+              <div className="flex items-center justify-between rounded-2xl bg-white/5 px-4 py-3">
+                <span className="text-xs text-zinc-400">Duration</span>
+                <span className="font-mono text-sm font-bold text-white">{sessionDurationStr}</span>
+              </div>
+              <div className="flex items-center justify-between rounded-2xl bg-white/5 px-4 py-3">
+                <span className="text-xs text-zinc-400">Tracks Played</span>
+                <span className="font-mono text-sm font-bold text-white">{tracksPlayedCount}</span>
+              </div>
+              <div className="flex items-center justify-between rounded-2xl bg-white/5 px-4 py-3">
+                <span className="text-xs text-zinc-400">Queue Size</span>
+                <span className="font-mono text-sm font-bold text-white">{queue.length} songs</span>
+              </div>
+              {!isDemo && (
+                <div className="flex items-center justify-between rounded-2xl bg-white/5 px-4 py-3">
+                  <span className="text-xs text-zinc-400">Sync Corrections</span>
+                  <span className="font-mono text-sm font-bold text-white">{syncMetrics.correctionCount}</span>
+                </div>
+              )}
+            </div>
+            <div className="mt-6 flex gap-3">
+              <button
+                onClick={() => setShowSessionSummary(false)}
+                className="flex-1 rounded-full border border-white/10 bg-white/5 py-2.5 text-xs font-semibold text-zinc-300 hover:bg-white/10 cursor-pointer"
+              >
+                Stay
+              </button>
+              <button
+                onClick={confirmLeave}
+                className="flex-1 rounded-full bg-rose-600 py-2.5 text-xs font-semibold text-white hover:bg-rose-700 cursor-pointer"
+              >
+                Leave Room
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Privacy Notice Modal */}
+      {showPrivacy && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="mx-4 w-full max-w-sm rounded-3xl border border-white/10 bg-zinc-900 p-6 shadow-2xl">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-600/20 text-emerald-400">
+                <Shield className="h-5 w-5" />
+              </div>
+              <h3 className="font-display text-lg font-bold text-white">Privacy & Data</h3>
+            </div>
+            <div className="mt-4 space-y-3 text-sm leading-relaxed text-zinc-400">
+              <p><strong className="text-white">Rooms are ephemeral.</strong> When a room closes, all data — messages, queue, and session info — is permanently deleted.</p>
+              <p><strong className="text-white">No accounts required.</strong> No persistent user data is stored. Session tokens exist only while a room is active.</p>
+              <p><strong className="text-white">Chat is private.</strong> Messages are only visible to room participants and are never stored beyond the session.</p>
+              <p><strong className="text-white">No tracking.</strong> Duet does not use cookies, analytics, or advertising trackers.</p>
+            </div>
+            <button
+              onClick={() => setShowPrivacy(false)}
+              className="mt-5 w-full rounded-full bg-white/10 py-2.5 text-xs font-semibold text-white hover:bg-white/15 cursor-pointer"
+            >
+              Got it
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Floating Live Reactions */}
+      <div className="pointer-events-none fixed right-6 bottom-24 z-50 flex flex-col items-end gap-2">
+        {reactions.map((r) => (
+          <div
+            key={r.id}
+            className="animate-fade-up flex items-center gap-2 rounded-full border border-white/10 bg-zinc-900/90 px-3.5 py-1.5 text-sm shadow-xl backdrop-blur-md"
+          >
+            <span className="text-lg">{r.emoji}</span>
+            <span className="text-xs font-semibold text-zinc-300">{r.senderName}</span>
+          </div>
+        ))}
+      </div>
+
+      {/* Header */}
+      <header className="sticky top-0 z-30 border-b border-white/5 bg-zinc-950/85 backdrop-blur-xl">
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-3.5 sm:px-8">
+          <div className="flex items-center gap-2.5">
+            <button
+              onClick={handleLeaveClick}
+              className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-white/5 text-zinc-300 transition hover:bg-white/10 cursor-pointer"
+              aria-label="Leave room"
+            >
+              <ArrowLeft className="h-4 w-4" />
+            </button>
+            <div className="flex items-center gap-2">
+              <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-white text-zinc-950">
+                <Radio className="h-4 w-4" />
+              </span>
+              <span className="font-display text-lg font-bold tracking-tight">Duet</span>
+            </div>
+
+            {isDemo && (
+              <span className="rounded-full bg-amber-500/15 px-2.5 py-1 text-[11px] font-bold tracking-wide text-amber-300 ring-1 ring-amber-500/30">
+                DEMO MODE
+              </span>
+            )}
+
+            <button
+              onClick={handleCopyCode}
+              className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-semibold tracking-wider text-white transition hover:bg-white/10 cursor-pointer"
+              title="Copy room code"
+            >
+              <span>{roomCode}</span>
+              {copied ? (
+                <Check className="h-3.5 w-3.5 text-emerald-400" />
+              ) : (
+                <Copy className="h-3.5 w-3.5 text-zinc-500" />
+              )}
+            </button>
+
+            {!isDemo && (
+              <button
+                onClick={handleCopyInviteLink}
+                className="hidden rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-semibold text-zinc-300 transition hover:bg-white/10 sm:inline-flex cursor-pointer"
+              >
+                {copiedLink ? 'Invite Copied!' : 'Copy Invite Link'}
+              </button>
+            )}
+          </div>
+
+          <div className="flex items-center gap-2">
+            {/* Real Sync & Telemetry Pill */}
+            <button
+              onClick={() => setShowMetrics((m) => !m)}
+              className="inline-flex items-center gap-2 rounded-full bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-400 cursor-pointer"
+              title="Click for synchronization metrics"
+            >
+              <span className="relative flex h-2 w-2">
+                <span className="animate-pulse-ring absolute inline-flex h-full w-full rounded-full bg-emerald-400" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+              </span>
+              <span>{isDemo ? 'Simulated' : roomState?.lifecycleState || connectionStatus}</span>
+              {!isDemo && <span className="text-emerald-400/70">• {syncMetrics.rttMs}ms RTT</span>}
+            </button>
+
+            {!isDemo && (
+              <button
+                onClick={() => setShowSettings((s) => !s)}
+                className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-white/5 text-zinc-300 transition hover:bg-white/10 cursor-pointer"
+                aria-label="Room settings"
+              >
+                <Settings className="h-4 w-4" />
+              </button>
+            )}
+
+            {/* Demo-only perspective switcher */}
+            {isDemo && (
+              <div className="inline-flex items-center rounded-full border border-white/10 bg-white/5 p-0.5">
+                <button
+                  onClick={() => {
+                    setDemoRole('host');
+                    setDemoUnlocked(true);
+                  }}
+                  className={`rounded-full px-3 py-1 text-xs font-semibold transition cursor-pointer ${
+                    isHost ? 'bg-white text-zinc-950' : 'text-zinc-400 hover:text-white'
+                  }`}
+                >
+                  Host
+                </button>
+                <button
+                  onClick={() => setDemoRole('guest')}
+                  className={`rounded-full px-3 py-1 text-xs font-semibold transition cursor-pointer ${
+                    !isHost ? 'bg-white text-zinc-950' : 'text-zinc-400 hover:text-white'
+                  }`}
+                >
+                  Guest
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Expandable Real Sync Metrics Drawer */}
+        {showMetrics && !isDemo && (
+          <div className="border-t border-white/5 bg-zinc-900/80 px-4 py-3 sm:px-8">
+            <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 text-xs text-zinc-400">
+              <div className="flex flex-wrap gap-5 font-mono">
+                <span>RTT: <strong className="text-white">{syncMetrics.rttMs}ms</strong></span>
+                <span>Clock Offset: <strong className="text-white">{syncMetrics.clockOffsetMs}ms</strong></span>
+                <span>Est. Drift: <strong className="text-white">{syncMetrics.driftMs}ms</strong></span>
+                <span>Corrections: <strong className="text-white">{syncMetrics.correctionCount}</strong></span>
+                <span>Reconnects: <strong className="text-white">{syncMetrics.reconnectCount}</strong></span>
+              </div>
+              <button
+                onClick={runClockSync}
+                className="inline-flex items-center gap-1 font-semibold text-violet-400 hover:text-violet-300 cursor-pointer"
+              >
+                <RefreshCw className="h-3 w-3" /> Recalibrate Clock
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Room Settings & Themes Drawer */}
+        {showSettings && !isDemo && (
+          <div className="border-t border-white/5 bg-zinc-900/90 px-4 py-4 sm:px-8">
+            <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <Palette className="h-4 w-4 text-zinc-400" />
+                <span className="text-xs font-semibold text-zinc-400">Theme:</span>
+                {Object.keys(THEME_STYLES).map((t) => (
+                  <button
+                    key={t}
+                    disabled={!isHost}
+                    onClick={() => sendCommand('room:settings', { theme: t })}
+                    className={`rounded-full px-3 py-1 text-xs font-semibold capitalize transition cursor-pointer disabled:opacity-50 ${
+                      theme === t ? 'bg-white text-zinc-950' : 'bg-white/5 text-zinc-300 hover:bg-white/10'
+                    }`}
+                  >
+                    {t}
+                  </button>
+                ))}
+              </div>
+
+              {isHost && (
+                <div className="flex flex-wrap items-center gap-3">
+                  <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(roomState?.settings?.allowGuestQueue)}
+                      onChange={(e) =>
+                        sendCommand('room:settings', { allowGuestQueue: e.target.checked })
+                      }
+                      className="accent-violet-500"
+                    />
+                    Allow guest to add songs
+                  </label>
+                  {partnerParticipant && (
+                    <button
+                      onClick={() =>
+                        sendCommand('room:transfer-host', {
+                          targetParticipantId: partnerParticipant.id,
+                        })
+                      }
+                      className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold text-zinc-300 hover:bg-white/10 cursor-pointer"
+                    >
+                      Make {partnerParticipant.name} Host
+                    </button>
+                  )}
+                  <button
+                    onClick={() => setShowPrivacy(true)}
+                    className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold text-zinc-300 hover:bg-white/10 cursor-pointer"
+                  >
+                    <Shield className="h-3 w-3" /> Privacy
+                  </button>
+                  <button
+                    onClick={() => sendCommand('room:close', {})}
+                    className="rounded-full bg-rose-600/20 px-3 py-1 text-xs font-semibold text-rose-300 hover:bg-rose-600/30 cursor-pointer"
+                  >
+                    End Room
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </header>
+
+      <main className="mx-auto max-w-7xl px-4 py-6 sm:px-8 sm:py-8">
+        {/* Errors */}
+        {(roomError || playerError) && (
+          <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-xs text-rose-200">
+            <span>{playerError?.message || roomError}</span>
+            <div className="flex items-center gap-2">
+              {playerError?.isEmbedBlocked && currentTrack && (
+                <button
+                  onClick={() => {
+                    setActiveTab('search');
+                    setSearchQuery(`${currentTrack.title} ${currentTrack.artist}`);
+                    setPlayerError(null);
+                  }}
+                  className="rounded-full bg-white/15 px-3 py-1 font-semibold text-white hover:bg-white/25 cursor-pointer"
+                >
+                  Find Embeddable Version
+                </button>
+              )}
+              <button onClick={() => setPlayerError(null)} className="text-rose-300 hover:text-white cursor-pointer">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Mobile Browser Autoplay Unlock Banner */}
+        {!audioUnlocked && (
+          <div className="mb-6 flex flex-col items-start justify-between gap-4 rounded-2xl border border-violet-500/30 bg-violet-500/10 p-4 sm:flex-row sm:items-center">
+            <div className="flex items-center gap-3">
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-violet-600 text-white">
+                <Volume2 className="h-5 w-5" />
+              </span>
+              <div>
+                <p className="text-sm font-bold text-white">Tap to unlock synced audio</p>
+                <p className="text-xs text-zinc-300">
+                  Mobile browsers require a tap gesture before syncing playback with your partner.
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={isDemo ? () => setDemoUnlocked(true) : unlockAudio}
+              className="w-full rounded-full bg-violet-600 px-5 py-2.5 text-xs font-semibold text-white shadow transition hover:bg-violet-700 sm:w-auto cursor-pointer"
+            >
+              Tap to Join Audio
+            </button>
+          </div>
+        )}
+
+        <div className="grid gap-6 lg:grid-cols-12 lg:items-start">
+          {/* Left: Player */}
+          <div className="space-y-5 lg:col-span-7">
+            <div className="rounded-3xl border border-white/5 bg-white/[0.02] p-5 sm:p-8">
+              {/* Source Switcher */}
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/5 pb-5">
+                <div>
+                  <p className="text-[11px] font-bold tracking-widest text-zinc-500 uppercase">
+                    Your Phone ({isHost ? 'Host' : 'Guest'})
+                  </p>
+                  <p className="text-sm font-bold text-white">Playback Source</p>
+                </div>
+                <div className="inline-flex rounded-full border border-white/10 bg-white/5 p-1">
+                  <button
+                    onClick={() => handleSourceSwitch('youtube')}
+                    className={`rounded-full px-3.5 py-1.5 text-xs font-semibold transition cursor-pointer ${
+                      mySource === 'youtube' ? 'bg-red-600 text-white' : 'text-zinc-400 hover:text-white'
+                    }`}
+                  >
+                    YouTube
+                  </button>
+                  <button
+                    onClick={() => handleSourceSwitch('local')}
+                    className={`rounded-full px-3.5 py-1.5 text-xs font-semibold transition cursor-pointer ${
+                      mySource === 'local' ? 'bg-violet-600 text-white' : 'text-zinc-400 hover:text-white'
+                    }`}
+                  >
+                    Test Audio
+                  </button>
+                  <button
+                    disabled
+                    title="Spotify playback unavailable pending policy authorization"
+                    className="rounded-full px-3 py-1.5 text-xs font-semibold text-zinc-600 cursor-not-allowed"
+                  >
+                    Spotify (Soon)
+                  </button>
+                </div>
+              </div>
+
+              {/* Player Stage: Visible YouTube IFrame OR Local Audio Visualizer */}
+              {currentTrack && (
+                <div className="mt-6 space-y-5">
+                  {!isDemo && mySource === 'youtube' ? (
+                    <div className="overflow-hidden rounded-2xl border border-white/10 bg-black">
+                      <div ref={ytContainerRef} className="aspect-video w-full" />
+                    </div>
+                  ) : (
+                    <div className="flex flex-col items-center gap-6 sm:flex-row">
+                      <div className="relative h-44 w-44 shrink-0 overflow-hidden rounded-2xl shadow-2xl sm:h-48 sm:w-48">
+                        {mySource === 'local' && !isDemo ? (
+                          <AudioVisualizerCanvas
+                            isPlaying={isPlaying}
+                            accentColor={currentTrack.accentColor || '#7c3aed'}
+                            secondaryColor={currentTrack.secondaryColor || '#f43f5e'}
+                            coverImage={currentTrack.coverImage}
+                            className="h-full w-full"
+                          />
+                        ) : currentTrack.coverImage ? (
+                          <img src={currentTrack.coverImage} alt={currentTrack.title} className="h-full w-full object-cover" />
+                        ) : (
+                          <div className={`flex h-full w-full items-center justify-center bg-gradient-to-br ${currentTrack.coverGradient || 'from-violet-600 to-rose-500'} text-white`}>
+                            <Disc3 className={`h-16 w-16 opacity-90 ${isPlaying ? 'animate-rotate-disc' : ''}`} />
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="w-full flex-1 text-center sm:text-left">
+                        <h2 className="font-display text-2xl font-bold tracking-tight text-white sm:text-3xl">
+                          {currentTrack.title}
+                        </h2>
+                        <p className="mt-1 text-base font-medium text-zinc-400">{currentTrack.artist}</p>
+                        {currentTrack.dedication && (
+                          <p className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-rose-500/10 px-3 py-1 text-xs font-medium text-rose-300">
+                            <Heart className="h-3 w-3 fill-current" /> "{currentTrack.dedication}"
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {!isDemo && mySource === 'youtube' && (
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <h2 className="font-display text-xl font-bold text-white">{currentTrack.title}</h2>
+                        <p className="text-sm text-zinc-400">{currentTrack.artist}</p>
+                      </div>
+                      {currentTrack.dedication && (
+                        <span className="inline-flex items-center gap-1.5 rounded-full bg-rose-500/10 px-3 py-1 text-xs font-medium text-rose-300">
+                          <Heart className="h-3 w-3 fill-current" /> "{currentTrack.dedication}"
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Scrubber */}
+              {currentTrack && (
+                <div className="mt-6">
+                  <input
+                    type="range"
+                    min={0}
+                    max={durationSec}
+                    value={currentSec}
+                    disabled={!isHost}
+                    onChange={handleSeek}
+                    aria-label="Track progress"
+                    className={`h-1.5 w-full appearance-none rounded-full accent-white ${
+                      isHost ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'
+                    }`}
+                    style={{
+                      background: `linear-gradient(to right, #fff ${progressPct}%, #3f3f46 ${progressPct}%)`,
+                    }}
+                  />
+                  <div className="mt-2 flex justify-between font-mono text-xs font-medium text-zinc-500">
+                    <span>{formatTime(currentSec)}</span>
+                    <span>{formatTime(durationSec)}</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Transport */}
+              <div className="mt-6 grid grid-cols-3 items-center gap-2">
+                <div className="flex items-center">
+                  {!isHost && (
+                    <span className="inline-flex items-center gap-1.5 rounded-full bg-white/5 px-3 py-1 text-xs font-medium text-zinc-400">
+                      <Lock className="h-3 w-3 shrink-0" />
+                      <span className="hidden sm:inline">Host controls</span>
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center justify-center gap-3">
+                  <button onClick={() => handleStep(-1)} disabled={!isHost} aria-label="Previous" className="flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-white/5 text-zinc-300 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer">
+                    <SkipBack className="h-4 w-4" />
+                  </button>
+                  <button onClick={handlePlayPause} disabled={!isHost} aria-label={isPlaying ? 'Pause' : 'Play'} className="flex h-14 w-14 items-center justify-center rounded-full bg-white text-zinc-950 shadow-lg transition-all hover:bg-zinc-200 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer">
+                    {isPlaying ? <Pause className="h-5 w-5 fill-current" /> : <Play className="h-5 w-5 translate-x-0.5 fill-current" />}
+                  </button>
+                  <button onClick={() => handleStep(1)} disabled={!isHost} aria-label="Next" className="flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-white/5 text-zinc-300 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer">
+                    <SkipForward className="h-4 w-4" />
+                  </button>
+                </div>
+                <div className="flex justify-end">
+                  <button
+                    onClick={() => (isDemo ? setDemoTime(currentSec) : runClockSync())}
+                    className="inline-flex items-center gap-1.5 text-xs font-semibold text-zinc-500 hover:text-white cursor-pointer"
+                  >
+                    <RefreshCw className="h-3.5 w-3.5" /> Resync
+                  </button>
+                </div>
+              </div>
+
+              {/* Live Reaction Bar */}
+              {!isDemo && (
+                <div className="mt-6 flex items-center justify-center gap-2 border-t border-white/5 pt-4">
+                  {REACTION_EMOJIS.map((emoji) => (
+                    <button
+                      key={emoji}
+                      onClick={() => handleSendReaction(emoji)}
+                      className="rounded-full bg-white/5 px-3 py-1.5 text-base transition hover:scale-110 hover:bg-white/10 active:scale-95 cursor-pointer"
+                    >
+                      {emoji}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Partner Mirror */}
+            <div className="rounded-3xl border border-white/5 bg-white/[0.02] p-5 sm:p-6">
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <div className="flex items-center gap-3.5">
+                  <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white/5 text-zinc-300 ring-1 ring-white/10">
+                    <Smartphone className="h-5 w-5" />
+                  </div>
+                  <div>
+                    {isDemo ? (
+                      <>
+                        <div className="flex items-center gap-2">
+                          <p className="text-sm font-bold text-white">{isHost ? 'Guest Phone (Demo)' : 'Host Phone (Demo)'}</p>
+                          <span className="rounded-full bg-red-500/10 px-2 py-0.5 text-[10px] font-bold text-red-400 uppercase">
+                            {demoPartnerSource}
+                          </span>
+                        </div>
+                        <p className="mt-0.5 text-xs text-zinc-500">
+                          {isHost ? 'Following at' : 'Leading at'}{' '}
+                          <span className="font-mono font-semibold text-white">{formatTime(currentSec)}</span>
+                        </p>
+                      </>
+                    ) : partnerParticipant ? (
+                      <>
+                        <div className="flex items-center gap-2">
+                          <p className="text-sm font-bold text-white">
+                            {partnerParticipant.name} ({partnerParticipant.role})
+                          </p>
+                          <span className="rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-bold text-zinc-300 uppercase">
+                            {partnerParticipant.source}
+                          </span>
+                          <span className={`h-2 w-2 rounded-full ${partnerParticipant.connected ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+                        </div>
+                        <p className="mt-0.5 text-xs text-zinc-500">
+                          {partnerParticipant.connected
+                            ? `${partnerParticipant.ready ? 'Ready' : 'Loading'} • Reported ${formatTime(
+                                Math.round((partnerParticipant.reportedPositionMs || 0) / 1000)
+                              )}`
+                            : 'Disconnected — waiting to reconnect'}
+                        </p>
+                      </>
+                    ) : (
+                      <>
+                        <p className="text-sm font-bold text-white">Waiting for your partner</p>
+                        <p className="mt-0.5 text-xs text-zinc-500">
+                          Share code <span className="font-mono font-semibold text-white">{roomCode}</span> or the invite link above.
+                        </p>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                {isDemo && (
+                  <button
+                    onClick={() => setDemoPartnerSource((s) => (s === 'youtube' ? 'local' : 'youtube'))}
+                    className="rounded-full border border-white/10 bg-white/5 px-3.5 py-1.5 text-xs font-semibold text-zinc-300 hover:bg-white/10 cursor-pointer"
+                  >
+                    Switch Source
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Right: Queue, Search & Private Chat */}
+          <div className="lg:col-span-5">
+            <div className="flex flex-col rounded-3xl border border-white/5 bg-white/[0.02] p-5 sm:p-6">
+              <div className="flex items-center justify-between border-b border-white/5 pb-4">
+                <div className="inline-flex rounded-full bg-white/5 p-1">
+                  <button
+                    onClick={() => setActiveTab('queue')}
+                    className={`inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-semibold transition cursor-pointer ${
+                      activeTab === 'queue' ? 'bg-white text-zinc-950' : 'text-zinc-400 hover:text-white'
+                    }`}
+                  >
+                    <ListMusic className="h-3.5 w-3.5" /> Queue ({queue.length})
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('search')}
+                    className={`inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-semibold transition cursor-pointer ${
+                      activeTab === 'search' ? 'bg-white text-zinc-950' : 'text-zinc-400 hover:text-white'
+                    }`}
+                  >
+                    <Search className="h-3.5 w-3.5" /> Add
+                  </button>
+                  {!isDemo && (
+                    <button
+                      onClick={() => setActiveTab('chat')}
+                      className={`inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-semibold transition cursor-pointer ${
+                        activeTab === 'chat' ? 'bg-white text-zinc-950' : 'text-zinc-400 hover:text-white'
+                      }`}
+                    >
+                      <MessageCircle className="h-3.5 w-3.5" /> Chat
+                      {unreadChatCount > 0 && (
+                        <span className="rounded-full bg-rose-500 px-1.5 text-[10px] font-bold text-white">
+                          {unreadChatCount}
+                        </span>
+                      )}
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {activeTab === 'search' && (
+                <div className="mt-4 flex flex-col gap-3">
+                  <div className="relative">
+                    <Search className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+                    <input
+                      type="text"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder="Search songs or paste YouTube URL..."
+                      className="w-full rounded-2xl border border-white/10 bg-white/5 py-2.5 pr-4 pl-10 text-sm text-white placeholder:text-zinc-600 focus:border-white/20 focus:outline-none"
+                    />
+                  </div>
+                  {!isDemo && !youtubeApiConfigured && (
+                    <p className="text-[11px] text-amber-300/90">
+                      YouTube Data API key not set in <code>server/.env</code> — paste any YouTube URL directly or add <code>YOUTUBE_API_KEY</code> for keyword search.
+                    </p>
+                  )}
+                  <input
+                    type="text"
+                    maxLength={120}
+                    value={dedication}
+                    onChange={(e) => setDedication(e.target.value)}
+                    placeholder='Optional dedication (e.g. "Reminds me of you")'
+                    className="w-full rounded-xl border border-white/5 bg-white/[0.03] px-3.5 py-2 text-xs text-white placeholder:text-zinc-600 focus:border-white/15 focus:outline-none"
+                  />
+                  {isSearching && <p className="text-xs text-zinc-500">Searching...</p>}
+                  {searchError && <p className="text-xs text-rose-400">{searchError}</p>}
+
+                  <div className="space-y-2 overflow-y-auto pr-1" style={{ maxHeight: 400 }}>
+                    {filteredCatalog.map((track) => (
+                      <div key={track.id} className="flex items-center justify-between gap-3 rounded-2xl border border-white/5 p-2.5 hover:bg-white/[0.03]">
+                        <div className="flex min-w-0 items-center gap-3">
+                          {track.coverImage ? (
+                            <img src={track.coverImage} alt="" className="h-11 w-11 shrink-0 rounded-xl object-cover" />
+                          ) : (
+                            <div className={`h-11 w-11 shrink-0 rounded-xl bg-gradient-to-br ${track.coverGradient || 'from-violet-600 to-rose-500'}`} />
+                          )}
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-bold text-white">{track.title}</p>
+                            <p className="truncate text-xs text-zinc-500">
+                              {track.artist} • {formatTime(track.durationSec)}
+                              {track.sourceAttribution ? ` • ${track.sourceAttribution}` : ''}
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => handleAddTrack(track)}
+                          className="inline-flex shrink-0 items-center gap-1 rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-zinc-950 hover:bg-zinc-200 cursor-pointer"
+                        >
+                          <Plus className="h-3 w-3" /> Add
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {activeTab === 'queue' && (
+                <div className="mt-4 space-y-2 overflow-y-auto pr-1" style={{ maxHeight: 470 }}>
+                  {isHost && queue.length > 0 && !isDemo && (
+                    <div className="flex justify-end pb-1">
+                      <button
+                        onClick={handleClearQueue}
+                        className="inline-flex items-center gap-1 rounded-full bg-rose-500/10 px-3 py-1 text-[11px] font-semibold text-rose-300 hover:bg-rose-500/20 cursor-pointer"
+                      >
+                        <Trash2 className="h-3 w-3" /> Clear All
+                      </button>
+                    </div>
+                  )}
+                  {queue.map((item, idx) => {
+                    const isCurr = item.queueItemId === currentQueueItemId;
+                    const track = item.track;
+                    return (
+                      <div
+                        key={item.queueItemId}
+                        onClick={() => {
+                          if (!isHost) return;
+                          if (isDemo) {
+                            setDemoIdx(idx);
+                            setDemoTime(0);
+                            setDemoPlaying(true);
+                          } else {
+                            sendCommand('queue:select', { queueItemId: item.queueItemId });
+                          }
+                        }}
+                        className={`group flex items-center justify-between gap-3 rounded-2xl p-2.5 transition ${
+                          isCurr ? 'bg-white text-zinc-950 shadow-sm' : 'border border-white/5 bg-white/[0.02] hover:bg-white/[0.04]'
+                        } ${isHost ? 'cursor-pointer' : ''}`}
+                      >
+                        <div className="flex min-w-0 items-center gap-3">
+                          <div className="relative h-11 w-11 shrink-0 overflow-hidden rounded-xl">
+                            {track.coverImage ? (
+                              <img src={track.coverImage} alt="" className="h-full w-full object-cover" />
+                            ) : (
+                              <div className={`flex h-full w-full items-center justify-center bg-gradient-to-br ${track.coverGradient || 'from-violet-600 to-rose-500'} text-white`}>
+                                <Disc3 className="h-4 w-4 opacity-80" />
+                              </div>
+                            )}
+                          </div>
+                          <div className="min-w-0">
+                            <p className={`truncate text-sm font-bold ${isCurr ? 'text-zinc-950' : 'text-white'}`}>
+                              {track.title}
+                            </p>
+                            <p className={`truncate text-xs ${isCurr ? 'text-zinc-600' : 'text-zinc-500'}`}>
+                              {track.artist} • {formatTime(track.durationSec)}
+                              {item.addedByName ? ` • by ${item.addedByName}` : ''}
+                            </p>
+                          </div>
+                        </div>
+
+                        {isHost && !isDemo && (
+                          <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                            {idx > 0 && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  sendCommand('queue:reorder', { fromIndex: idx, toIndex: idx - 1 });
+                                }}
+                                className={`rounded-full p-1 cursor-pointer ${isCurr ? 'text-zinc-600 hover:bg-zinc-200' : 'text-zinc-400 hover:bg-white/10'}`}
+                                aria-label="Move up"
+                              >
+                                <ArrowUp className="h-3.5 w-3.5" />
+                              </button>
+                            )}
+                            {idx < queue.length - 1 && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  sendCommand('queue:reorder', { fromIndex: idx, toIndex: idx + 1 });
+                                }}
+                                className={`rounded-full p-1 cursor-pointer ${isCurr ? 'text-zinc-600 hover:bg-zinc-200' : 'text-zinc-400 hover:bg-white/10'}`}
+                                aria-label="Move down"
+                              >
+                                <ArrowDown className="h-3.5 w-3.5" />
+                              </button>
+                            )}
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                sendCommand('queue:remove', { queueItemId: item.queueItemId });
+                              }}
+                              className={`rounded-full p-1 cursor-pointer ${isCurr ? 'text-zinc-600 hover:bg-zinc-200' : 'text-zinc-400 hover:bg-white/10'}`}
+                              aria-label="Remove track"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {activeTab === 'chat' && !isDemo && (
+                <div className="mt-4 flex flex-col">
+                  <div className="space-y-2.5 overflow-y-auto pr-1" style={{ height: 390 }}>
+                    {(roomState?.chat || []).length === 0 && (
+                      <p className="py-12 text-center text-xs text-zinc-500">
+                        Private room chat — messages clear when the room closes.
+                      </p>
+                    )}
+                    {(roomState?.chat || []).map((msg) => {
+                      const mine = msg.senderId === session?.participantId;
+                      return (
+                        <div key={msg.id} className={`flex flex-col ${mine ? 'items-end' : 'items-start'}`}>
+                          <span className="mb-1 text-[10px] font-semibold text-zinc-500">{msg.senderName}</span>
+                          <div
+                            className={`max-w-[85%] rounded-2xl px-3.5 py-2 text-xs leading-relaxed ${
+                              mine ? 'bg-violet-600 text-white' : 'bg-white/10 text-zinc-100'
+                            }`}
+                          >
+                            {msg.text}
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {partnerTyping && (
+                      <div className="flex flex-col items-start">
+                        <div className="rounded-2xl bg-white/5 px-3.5 py-2 text-xs text-zinc-400">
+                          <span className="inline-flex gap-0.5">
+                            <span className="animate-bounce" style={{ animationDelay: '0s' }}>·</span>
+                            <span className="animate-bounce" style={{ animationDelay: '0.15s' }}>·</span>
+                            <span className="animate-bounce" style={{ animationDelay: '0.3s' }}>·</span>
+                          </span>
+                          {' '}typing
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  <form onSubmit={handleSendChat} className="mt-3 flex items-center gap-2">
+                    <input
+                      type="text"
+                      maxLength={500}
+                      value={chatText}
+                      onChange={handleChatInputChange}
+                      placeholder="Message your partner..."
+                      className="flex-1 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs text-white placeholder:text-zinc-500 focus:border-white/20 focus:outline-none"
+                    />
+                    <button
+                      type="submit"
+                      className="flex h-9 w-9 items-center justify-center rounded-full bg-white text-zinc-950 hover:bg-zinc-200 cursor-pointer"
+                      aria-label="Send message"
+                    >
+                      <Send className="h-3.5 w-3.5" />
+                    </button>
+                  </form>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+  );
+}

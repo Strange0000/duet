@@ -1,0 +1,18 @@
+{
+  "name": "Duet — Listen Together",
+  "short_name": "Duet",
+  "description": "Two phones. One song. Same second. Private synchronized listening rooms.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#09090b",
+  "theme_color": "#09090b",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/cover-midnight.jpg",
+      "sizes": "512x512",
+      "type": "image/jpeg",
+      "purpose": "any"
+    }
+  ]
+}

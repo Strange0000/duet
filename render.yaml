@@ -1,0 +1,38 @@
+services:
+  - type: web
+    name: duet-backend
+    runtime: node
+    rootDir: server
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3001
+      - key: CLIENT_ORIGIN
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: YOUTUBE_API_KEY
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: ENABLE_SPOTIFY
+        value: "false"
+
+  - type: web
+    name: duet-frontend
+    runtime: static
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: VITE_API_URL
+        sync: false
+      - key: VITE_SOCKET_URL
+        sync: false
