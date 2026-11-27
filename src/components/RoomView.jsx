@@ -589,7 +589,12 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
       title,
       artist,
       album: 'YouTube',
-      durationSec: null,
+      // Duration is unknown from oEmbed. The production backend (pre-PR #4)
+      // requires durationSec to be a number, so send 210 as a placeholder;
+      // the player reports the real duration via player:duration as soon as
+      // the track starts playing, which corrects it (N-02). The PR #4
+      // backend accepts null here, but a number works on both.
+      durationSec: 210,
       coverImage,
       youtubeId: videoId,
       sourceAttribution: 'YouTube (oEmbed)',
