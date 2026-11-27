@@ -571,6 +571,7 @@ export function RoomProvider({ children }) {
     runClockSync,
     sendCommand,
     setPlayerError,
+    setRoomError,
   };
 
   return <RoomContext.Provider value={value}>{children}</RoomContext.Provider>;

@@ -77,6 +77,7 @@ export default function RoomView({ isDemo = false, onLeave }) {
     sendCommand,
     leaveRoom,
     setPlayerError,
+    setRoomError,
   } = useRoom();
 
   // ——— Demo Mode Fallback State (only used when isDemo === true) ———
@@ -952,7 +953,14 @@ export default function RoomView({ isDemo = false, onLeave }) {
                   Find Embeddable Version
                 </button>
               )}
-              <button onClick={() => setPlayerError(null)} className="text-rose-300 hover:text-white cursor-pointer">
+              <button
+                onClick={() => {
+                  setPlayerError(null);
+                  setRoomError(null);
+                }}
+                aria-label="Dismiss error"
+                className="text-rose-300 hover:text-white cursor-pointer"
+              >
                 <X className="h-4 w-4" />
               </button>
             </div>
