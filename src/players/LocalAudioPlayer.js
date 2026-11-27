@@ -152,6 +152,11 @@ export class LocalAudioPlayer extends BasePlayer {
     return this.durationMs;
   }
 
+  // The local track actually loaded right now (B1 drift-loop guard).
+  async getLoadedVideoId() {
+    return this.track?.id || null;
+  }
+
   async getState() {
     return this.state;
   }

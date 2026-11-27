@@ -14,6 +14,12 @@ export class BasePlayer {
   async getDuration() {
     return 0;
   }
+  // Identifier of the media actually loaded in the player right now, or
+  // null when unknown. The drift loop uses this to avoid seeking a player
+  // that is still on the previous track while a new one loads (B1).
+  async getLoadedVideoId() {
+    return null;
+  }
   async getState() {
     return 'idle';
   }

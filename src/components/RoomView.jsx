@@ -1555,6 +1555,15 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                       type="text"
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
+                      onKeyDown={(e) => {
+                        // Pressing Enter adds the first result — pasting a
+                        // YouTube link then hitting Enter is the main way to
+                        // add a song, and previously Enter did nothing.
+                        if (e.key === 'Enter' && filteredCatalog.length > 0) {
+                          e.preventDefault();
+                          handleAddTrack(filteredCatalog[0]);
+                        }
+                      }}
                       placeholder="Search songs or paste YouTube URL..."
                       aria-label="Search songs or paste a YouTube link"
                       className="w-full rounded-2xl border border-white/10 bg-white/5 py-2.5 pr-4 pl-10 text-sm text-white placeholder:text-zinc-600 focus:border-white/20 focus:outline-none"

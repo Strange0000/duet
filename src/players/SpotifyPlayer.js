@@ -296,6 +296,11 @@ export class SpotifyPlayer extends BasePlayer {
     return this.lastDurationMs;
   }
 
+  // The Spotify URI actually loaded right now (B1 drift-loop guard).
+  async getLoadedVideoId() {
+    return this.currentUri || null;
+  }
+
   async getState() {
     return this.state;
   }

@@ -257,6 +257,15 @@ export function RoomProvider({ children }) {
         await player.loadTrack(track, expectedMs, playback.playbackState === 'playing');
         // N-02: correct the stored duration from the real player duration.
         await maybeReportRealDuration(playback);
+        // B1 (follow-up): loadVideoById is asynchronous — the new video has
+        // NOT finished loading when loadTrack returns. The seek/play sync
+        // below would therefore operate on the OLD video still loaded in the
+        // player (seeking it to the new track's position and pinning it
+        // there), which is exactly why Next left the old song playing for
+        // minutes. loadVideoById already plays the new video at the right
+        // start position, so return here and let the drift loop fine-tune
+        // the position once the new video is actually loaded.
+        return;
       }
 
       if (!audioUnlockedRef.current) return;
@@ -614,6 +623,45 @@ export function RoomProvider({ children }) {
           reportedPositionMs: Math.round(actualMs),
           expectedPositionMs: Math.round(expectedMs),
           driftMs: Math.round(actualMs - expectedMs),
+        }));
+        return;
+      }
+
+      // B1: do NOT seek when the player is still on the previous track.
+      // After Next, loadVideoById takes a moment to swap the video; until
+      // it does, the player's position/duration belong to the OLD video and
+      // any seek here would pin the old video in place (and stop the new
+      // one from ever loading). Compare the actually-loaded media ID with
+      // the current track's ID and skip the correction until they match.
+      let loadedId = null;
+      try {
+        loadedId = typeof player.getLoadedVideoId === 'function' ? await player.getLoadedVideoId() : null;
+      } catch {
+        loadedId = null;
+      }
+      const curTrack =
+        st.queue?.find((q) => q.queueItemId === st.currentQueueItemId)?.track ||
+        st.queue?.[0]?.track ||
+        null;
+      const mySource =
+        st.participants?.find((p) => sessionRef.current && p.id === sessionRef.current.participantId)?.source ||
+        myParticipant?.source ||
+        'youtube';
+      const expectedId = curTrack
+        ? mySource === 'spotify'
+          ? curTrack.spotifyUri || null
+          : mySource === 'local'
+            ? curTrack.id || null
+            : curTrack.youtubeId || null
+        : null;
+      if (loadedId && expectedId && loadedId !== expectedId) {
+        // Player is still on the previous track — report the position but
+        // do not seek or count this as drift.
+        setSyncMetrics((prev) => ({
+          ...prev,
+          reportedPositionMs: Math.round(actualMs),
+          expectedPositionMs: Math.round(expectedMs),
+          driftMs: 0,
         }));
         return;
       }

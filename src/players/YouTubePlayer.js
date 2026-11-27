@@ -240,6 +240,23 @@ export class YouTubePlayer extends BasePlayer {
     return Math.max(0, Math.round(this.player.getDuration() * 1000));
   }
 
+  // The video ID the YouTube player has ACTUALLY loaded right now, parsed
+  // from getVideoUrl(). This is the ground truth — currentVideoId is set
+  // when loadTrack is called, before the new video finishes loading, so it
+  // cannot tell the drift loop whether the new video is on screen yet (B1).
+  async getLoadedVideoId() {
+    try {
+      const url = this.player?.getVideoUrl?.();
+      if (typeof url === 'string' && url) {
+        const v = new URL(url).searchParams.get('v');
+        if (v && /^[A-Za-z0-9_-]{11}$/.test(v)) return v;
+      }
+    } catch {
+      // Fall through to currentVideoId
+    }
+    return this.currentVideoId || null;
+  }
+
   async getState() {
     return this.state;
   }
