@@ -165,10 +165,16 @@
 }
 
 @keyframes midnightTwinkle {
-  0%, 100% { opacity: 0.1; }
-  25%      { opacity: 0.18; }
-  75%      { opacity: 0.08; }
+  0%, 100% { opacity: 0.35; }
+  25%      { opacity: 0.5; }
+  75%      { opacity: 0.3; }
 }
+
+.animate-aurora   { animation: auroraShimmer 10s ease-in-out infinite; }
+.animate-sunset   { animation: sunsetPulse 9s ease-in-out infinite; }
+.animate-ocean    { animation: oceanWave 8s ease-in-out infinite; }
+.animate-rose     { animation: rosePetal 9s ease-in-out infinite; }
+.animate-midnight { animation: midnightTwinkle 8s ease-in-out infinite; }
 
 /* ——— Scrollbar ——— */
 

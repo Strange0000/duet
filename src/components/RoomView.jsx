@@ -36,12 +36,12 @@ import { searchRealSongs } from '../utils/artworkApi';
 import AudioVisualizerCanvas from './AudioVisualizerCanvas';
 
 const THEME_STYLES = {
-  midnight: { bg: 'bg-zinc-950', accent: '#7c3aed', image: '/themes/midnight-bg.jpg' },
-  aurora: { bg: 'bg-gradient-to-b from-slate-950 via-emerald-950/30 to-zinc-950', accent: '#10b981', image: '/themes/aurora-bg.jpg' },
-  sunset: { bg: 'bg-gradient-to-b from-zinc-950 via-rose-950/30 to-zinc-950', accent: '#f97316', image: '/themes/sunset-bg.jpg' },
-  rose: { bg: 'bg-gradient-to-b from-zinc-950 via-pink-950/25 to-zinc-950', accent: '#ec4899', image: '/themes/rose-bg.jpg' },
-  ocean: { bg: 'bg-gradient-to-b from-slate-950 via-sky-950/30 to-zinc-950', accent: '#0ea5e9', image: '/themes/ocean-bg.jpg' },
-  minimal: { bg: 'bg-black', accent: '#a1a1aa', image: '/themes/minimal-bg.jpg' },
+  midnight: { bg: 'bg-zinc-950', accent: '#7c3aed', image: '/themes/midnight-bg.jpg', anim: 'animate-midnight', tint: 'from-indigo-950/40 via-zinc-950/55 to-zinc-950/90' },
+  aurora: { bg: 'bg-gradient-to-b from-slate-950 via-emerald-950/40 to-zinc-950', accent: '#10b981', image: '/themes/aurora-bg.jpg', anim: 'animate-aurora', tint: 'from-emerald-950/35 via-slate-950/50 to-zinc-950/90' },
+  sunset: { bg: 'bg-gradient-to-b from-zinc-950 via-rose-950/40 to-zinc-950', accent: '#f97316', image: '/themes/sunset-bg.jpg', anim: 'animate-sunset', tint: 'from-orange-950/35 via-rose-950/45 to-zinc-950/90' },
+  rose: { bg: 'bg-gradient-to-b from-zinc-950 via-pink-950/35 to-zinc-950', accent: '#ec4899', image: '/themes/rose-bg.jpg', anim: 'animate-rose', tint: 'from-pink-950/35 via-zinc-950/50 to-zinc-950/90' },
+  ocean: { bg: 'bg-gradient-to-b from-slate-950 via-sky-950/40 to-zinc-950', accent: '#0ea5e9', image: '/themes/ocean-bg.jpg', anim: 'animate-ocean', tint: 'from-sky-950/40 via-slate-950/50 to-zinc-950/90' },
+  minimal: { bg: 'bg-black', accent: '#a1a1aa', image: '/themes/minimal-bg.jpg', anim: '', tint: 'from-black/40 via-black/60 to-black/95' },
 };
 
 const THEME_PILL_COLORS = {
@@ -88,6 +88,7 @@ export default function RoomView({ isDemo = false, onLeave }) {
   const [demoIdx, setDemoIdx] = useState(0);
   const [demoPlaying, setDemoPlaying] = useState(true);
   const [demoTime, setDemoTime] = useState(102);
+  const [demoTheme, setDemoTheme] = useState('midnight');
 
   useEffect(() => {
     if (!isDemo || !demoPlaying) return;
@@ -152,7 +153,7 @@ export default function RoomView({ isDemo = false, onLeave }) {
   const currentSec = isDemo
     ? demoTime
     : Math.round((syncMetrics.reportedPositionMs || 0) / 1000);
-  const theme = isDemo ? 'midnight' : roomState?.settings?.theme || 'midnight';
+  const theme = isDemo ? demoTheme : roomState?.settings?.theme || 'midnight';
 
   // Initialize real player adapter when source or room changes
   useEffect(() => {
@@ -432,9 +433,13 @@ export default function RoomView({ isDemo = false, onLeave }) {
   return (
     <div className={`relative min-h-screen text-white transition-colors duration-700 ${(THEME_STYLES[theme] || THEME_STYLES.midnight).bg}`}>
       {/* Theme Background Image */}
-      <div className="pointer-events-none fixed inset-0 z-0 transition-opacity duration-1000" key={theme}>
-        <img src={(THEME_STYLES[theme] || THEME_STYLES.midnight).image} alt="" className="h-full w-full object-cover opacity-15" />
-        <div className="absolute inset-0 bg-gradient-to-b from-zinc-950/50 via-zinc-950/80 to-zinc-950" />
+      <div className="pointer-events-none fixed inset-0 z-0 overflow-hidden transition-opacity duration-1000" key={theme}>
+        <img
+          src={(THEME_STYLES[theme] || THEME_STYLES.midnight).image}
+          alt=""
+          className={`h-full w-full object-cover opacity-45 transition-all duration-1000 ${(THEME_STYLES[theme] || THEME_STYLES.midnight).anim}`}
+        />
+        <div className={`absolute inset-0 bg-gradient-to-b ${(THEME_STYLES[theme] || THEME_STYLES.midnight).tint}`} />
       </div>
       {/* Session Summary Modal */}
       {showSessionSummary && (
@@ -605,17 +610,17 @@ export default function RoomView({ isDemo = false, onLeave }) {
 
       {/* Header */}
       <header className="sticky top-0 z-30 border-b border-white/5 bg-zinc-950/90 backdrop-blur-xl">
-        {/* Row 1: Logo, Room Code, Status, Notifications, Settings */}
+        {/* Row 1: Logo, Room Code, Theme, Copy Invite, Status, Notifications, Settings */}
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-2.5 sm:px-8">
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-2 overflow-x-auto">
             <button
               onClick={handleLeaveClick}
-              className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-white/5 text-zinc-300 transition hover:bg-white/10 cursor-pointer"
+              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/5 text-zinc-300 transition hover:bg-white/10 cursor-pointer"
               aria-label="Leave room"
             >
               <ArrowLeft className="h-3.5 w-3.5" />
             </button>
-            <div className="flex items-center gap-2">
+            <div className="flex shrink-0 items-center gap-2">
               <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-white text-zinc-950">
                 <Radio className="h-3.5 w-3.5" />
               </span>
@@ -623,14 +628,14 @@ export default function RoomView({ isDemo = false, onLeave }) {
             </div>
 
             {isDemo && (
-              <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold tracking-wide text-amber-300 ring-1 ring-amber-500/30">
+              <span className="shrink-0 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold tracking-wide text-amber-300 ring-1 ring-amber-500/30">
                 DEMO
               </span>
             )}
 
             <button
               onClick={handleCopyCode}
-              className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-bold tracking-wider text-white transition hover:bg-white/10 cursor-pointer"
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-bold tracking-wider text-white transition hover:bg-white/10 cursor-pointer"
               title="Copy room code"
             >
               <span>{roomCode}</span>
@@ -641,17 +646,41 @@ export default function RoomView({ isDemo = false, onLeave }) {
               )}
             </button>
 
+            {/* Theme pills — inline in the header row */}
+            <div className="flex shrink-0 items-center gap-1">
+              <Palette className="h-3.5 w-3.5 text-zinc-500" />
+              {Object.keys(THEME_STYLES).map((t) => (
+                <button
+                  key={t}
+                  onClick={() => {
+                    if (isDemo) {
+                      setDemoTheme(t);
+                      return;
+                    }
+                    sendCommand('room:settings', { theme: t });
+                  }}
+                  className={`shrink-0 rounded-full px-2.5 py-0.5 text-[11px] font-semibold capitalize transition cursor-pointer ${
+                    theme === t
+                      ? 'bg-white text-zinc-950 shadow-sm'
+                      : 'bg-white/5 text-zinc-400 hover:bg-white/10 hover:text-white'
+                  }`}
+                >
+                  {t}
+                </button>
+              ))}
+            </div>
+
             {!isDemo && (
               <button
                 onClick={handleCopyInviteLink}
-                className="hidden rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-semibold text-zinc-300 transition hover:bg-white/10 sm:inline-flex cursor-pointer"
+                className="hidden shrink-0 rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-semibold text-zinc-300 transition hover:bg-white/10 sm:inline-flex cursor-pointer"
               >
                 {copiedLink ? 'Copied!' : 'Copy Invite Link'}
               </button>
             )}
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2">
             {/* Sync Status */}
             <button
               onClick={() => setShowMetrics((m) => !m)}
@@ -765,8 +794,13 @@ export default function RoomView({ isDemo = false, onLeave }) {
                     setShowSettings((s) => !s);
                     setShowNotifications(false);
                   }}
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-white/5 text-zinc-300 transition hover:bg-white/10 cursor-pointer"
+                  className={`inline-flex h-8 w-8 items-center justify-center rounded-full border transition cursor-pointer ${
+                    showSettings
+                      ? 'border-white/30 bg-white text-zinc-950'
+                      : 'border-white/10 bg-white/5 text-zinc-300 hover:bg-white/10'
+                  }`}
                   aria-label="Room settings"
+                  aria-expanded={showSettings}
                 >
                   <Settings className="h-3.5 w-3.5" />
                 </button>
@@ -821,30 +855,10 @@ export default function RoomView({ isDemo = false, onLeave }) {
           </div>
         )}
 
-        {/* Row 2: Theme Pills + Settings Checkboxes + Privacy + End Room — always visible toolbar */}
-        {!isDemo && (
+        {/* Settings drawer — toggled by Settings gear icon */}
+        {showSettings && !isDemo && (
           <div className="border-t border-white/5 bg-zinc-950/70 px-4 py-2 sm:px-8">
             <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-x-4 gap-y-2">
-              {/* Theme selector */}
-              <div className="flex items-center gap-1.5">
-                <Palette className="h-3.5 w-3.5 text-zinc-500" />
-                <span className="text-[11px] font-semibold text-zinc-500 mr-1">Theme:</span>
-                {Object.keys(THEME_STYLES).map((t) => (
-                  <button
-                    key={t}
-                    disabled={!canControl}
-                    onClick={() => sendCommand('room:settings', { theme: t })}
-                    className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold capitalize transition cursor-pointer disabled:opacity-50 ${
-                      theme === t
-                        ? 'bg-white text-zinc-950 shadow-sm'
-                        : 'bg-white/5 text-zinc-400 hover:bg-white/10 hover:text-white'
-                    }`}
-                  >
-                    {t}
-                  </button>
-                ))}
-              </div>
-
               {/* Settings checkboxes + actions */}
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
                 {canControl && (
@@ -884,12 +898,26 @@ export default function RoomView({ isDemo = false, onLeave }) {
                     </label>
                   </>
                 )}
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
                 <button
                   onClick={() => setShowPrivacy(true)}
                   className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/5 px-2.5 py-0.5 text-[11px] font-semibold text-zinc-400 hover:bg-white/10 hover:text-white cursor-pointer transition"
                 >
                   <Shield className="h-3 w-3" /> Privacy
                 </button>
+                {isHost && partnerParticipant && (
+                  <button
+                    onClick={() =>
+                      sendCommand('room:transfer-host', {
+                        targetParticipantId: partnerParticipant.id,
+                      })
+                    }
+                    className="rounded-full border border-white/10 bg-white/5 px-2.5 py-0.5 text-[11px] font-semibold text-zinc-400 hover:bg-white/10 hover:text-white cursor-pointer transition"
+                  >
+                    Make {partnerParticipant.name} Host
+                  </button>
+                )}
                 {isHost && (
                   <button
                     onClick={() => sendCommand('room:close', {})}
