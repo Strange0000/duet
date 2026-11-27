@@ -13,7 +13,10 @@ export const trackSchema = z.object({
   title: z.string().trim().min(1).max(200),
   artist: z.string().trim().min(1).max(200),
   album: z.string().trim().max(200).optional().default('Single'),
-  durationSec: z.number().finite().min(1).max(43200),
+  durationSec: z.number().finite().min(1).max(43200).nullable(),
+  // N-02: durationSec may be null ("unknown") for tracks resolved via oEmbed
+  // without a YouTube API key; the client reports the real duration later
+  // via player:duration. The room store treats null as durationMs 0.
   coverImage: z.string().max(500).nullable().optional(),
   coverGradient: z.string().max(120).optional(),
   accentColor: z.string().max(32).optional(),
@@ -35,6 +38,9 @@ export const joinRoomSchema = z.object({
   roomCode: roomCodeSchema,
   name: z.string().trim().min(1).max(40).optional().default('Guest'),
   source: sourceSchema.optional().default('youtube'),
+  // M4: idempotent rejoin — a returning participant sends the sessionToken
+  // from their first join and reuses the same slot instead of hitting ROOM_FULL.
+  sessionToken: z.string().min(16).max(128).optional(),
 });
 
 export const reconnectRoomSchema = z.object({
@@ -46,6 +52,10 @@ export const commandBaseSchema = z.object({
   commandId: z.string().min(1).max(80).optional(),
   expectedRoomVersion: z.number().int().nonnegative().optional(),
 });
+
+// N-13: generic command payload (no track/queue data) for player:next,
+// player:previous and queue:clear.
+export const commandSchema = commandBaseSchema;
 
 export const playerStatusSchema = z.object({
   ready: z.boolean().optional(),
@@ -66,6 +76,13 @@ export const playerPauseSchema = commandBaseSchema.extend({
 
 export const playerSeekSchema = commandBaseSchema.extend({
   positionMs: z.number().finite().min(0).max(43200000),
+});
+
+// N-02: client reports the real duration from player.getDuration() once a
+// track starts playing, so the server can correct an unknown (oEmbed) duration.
+export const playerDurationSchema = z.object({
+  durationMs: z.number().finite().min(15000).max(43200000),
+  trackVersion: z.number().int().nonnegative(),
 });
 
 export const queueAddSchema = commandBaseSchema.extend({

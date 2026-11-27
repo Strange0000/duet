@@ -4,7 +4,7 @@ export class BasePlayer {
   }
 
   async initialize(_containerEl) {}
-  async loadTrack(_track, _startPositionMs = 0) {}
+  async loadTrack(_track, _startPositionMs = 0, _shouldPlay = false) {}
   async play() {}
   async pause() {}
   async seek(_positionMs) {}
@@ -14,8 +14,19 @@ export class BasePlayer {
   async getDuration() {
     return 0;
   }
+  // Identifier of the media actually loaded in the player right now, or
+  // null when unknown. The drift loop uses this to avoid seeking a player
+  // that is still on the previous track while a new one loads (B1).
+  async getLoadedVideoId() {
+    return null;
+  }
   async getState() {
     return 'idle';
+  }
+  async setVolume(_volume01) {}
+  async setMuted(_muted) {}
+  async getVolume() {
+    return 1;
   }
   async destroy() {}
 

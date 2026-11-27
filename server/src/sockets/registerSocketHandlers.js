@@ -1,9 +1,11 @@
 import {
   chatSendSchema,
+  commandSchema,
   createRoomSchema,
   joinRespondSchema,
   joinRoomSchema,
   participantUpdateSchema,
+  playerDurationSchema,
   playerPauseSchema,
   playerPlaySchema,
   playerSeekSchema,
@@ -37,29 +39,51 @@ function validate(schema, raw) {
 }
 
 export function registerSocketHandlers(io, store, env) {
+  // N-12: rate limiters keyed by participantId live at SERVER level (not in
+  // the per-connection closure) so a reconnect does not reset them. A limiter
+  // is created on first use for a participantId + event kind and reused across
+  // reconnects. (room:create / room:join run before any participantId exists,
+  // so those two stay per-connection; see below.)
+  const createSlidingWindowLimiter = (limit) => {
+    let attempts = 0;
+    let lastReset = Date.now();
+    return () => {
+      const now = Date.now();
+      if (now - lastReset > 60000) {
+        attempts = 0;
+        lastReset = now;
+      }
+      attempts += 1;
+      return attempts <= limit;
+    };
+  };
+  const participantLimiters = new Map(); // participantId -> Map<kind, limiter>
+  const checkParticipantLimit = (participantId, kind, limit) => {
+    let byKind = participantLimiters.get(participantId);
+    if (!byKind) {
+      if (participantLimiters.size > 5000) {
+        participantLimiters.delete(participantLimiters.keys().next().value);
+      }
+      byKind = new Map();
+      participantLimiters.set(participantId, byKind);
+    }
+    let limiter = byKind.get(kind);
+    if (!limiter) {
+      limiter = createSlidingWindowLimiter(limit);
+      byKind.set(kind, limiter);
+    }
+    return limiter();
+  };
+
   io.on('connection', (socket) => {
     socket.data.roomCode = null;
     socket.data.participantId = null;
 
-    // Simple per-socket sliding window rate limiters (per minute).
-    // Joins were already limited; room creation, chat and reactions were not.
-    const makeRateLimiter = (limit) => {
-      let attempts = 0;
-      let lastReset = Date.now();
-      return () => {
-        const now = Date.now();
-        if (now - lastReset > 60000) {
-          attempts = 0;
-          lastReset = now;
-        }
-        attempts += 1;
-        return attempts <= limit;
-      };
-    };
-    const checkJoinRateLimit = makeRateLimiter(15);
-    const checkCreateRateLimit = makeRateLimiter(10);
-    const checkChatRateLimit = makeRateLimiter(30);
-    const checkReactionRateLimit = makeRateLimiter(30);
+    // Pre-membership limiters (per connection): no participantId exists yet
+    // when a socket creates or joins a room, so these cannot be keyed by
+    // participantId. Limits: join 15/min, create 10/min.
+    const checkJoinRateLimit = createSlidingWindowLimiter(15);
+    const checkCreateRateLimit = createSlidingWindowLimiter(10);
     const rateLimited = (ack, what) =>
       reply(ack, { ok: false, code: 'RATE_LIMITED', error: `Too many ${what}. Please wait a minute.` });
 
@@ -124,6 +148,9 @@ export function registerSocketHandlers(io, store, env) {
       socket.data.roomCode = created.room.code;
       socket.data.participantId = created.participantId;
       socket.join(created.room.code);
+      // N-04: attach the host's socket at creation so the participant has a
+      // socketId from the start (previously null until a later join/reconnect).
+      store.attachSocket(created.room.code, created.participantId, socket.id);
 
       const serialized = store.serializeRoom(created.room);
       const result = {
@@ -155,7 +182,14 @@ export function registerSocketHandlers(io, store, env) {
       }
 
       const targetRoom = store.getRoom(v.data.roomCode);
-      if (targetRoom?.settings?.requireApproval) {
+      // M4: a returning participant (valid sessionToken for this room) rejoins
+      // directly — they already passed approval once, and room:join must not
+      // route them through a fresh pending request or ROOM_FULL.
+      const returningParticipant =
+        v.data.sessionToken && targetRoom
+          ? store.getParticipantBySessionToken(targetRoom.code, v.data.sessionToken)
+          : null;
+      if (targetRoom?.settings?.requireApproval && !returningParticipant) {
         const reqRes = store.requestJoin({ ...v.data, socketId: socket.id });
         if (reqRes.error) {
           socket.emit('room:error', { code: reqRes.code, error: reqRes.error });
@@ -209,6 +243,26 @@ export function registerSocketHandlers(io, store, env) {
       if (!ctx) return;
       const v = validate(joinRespondSchema, raw);
       if (!v.ok) return reply(ack, { ok: false, error: v.error });
+
+      // N-05: when approving, check the guest socket is still connected
+      // BEFORE joining. Approving after the guest dropped used to create a
+      // ghost participant (sessionToken never delivered, slot bricked).
+      if (v.data.approve) {
+        const pending = store.getPendingJoin(ctx.room.code, v.data.requestId);
+        if (!pending) {
+          return reply(ack, { ok: false, code: 'NOT_FOUND', error: 'Join request not found or expired' });
+        }
+        const guestSocket = pending.socketId ? io.sockets.sockets.get(pending.socketId) : null;
+        if (!guestSocket) {
+          store.cancelJoinRequest(ctx.room.code, v.data.requestId);
+          emitRoomState(ctx.room);
+          return reply(ack, {
+            ok: false,
+            code: 'GUEST_DISCONNECTED',
+            error: 'Guest disconnected — ask them to rejoin',
+          });
+        }
+      }
 
       const res = store.respondToJoin(ctx.room.code, ctx.participant.id, v.data);
       if (res.error) return reply(ack, { ok: false, code: res.code, error: res.error });
@@ -398,6 +452,23 @@ export function registerSocketHandlers(io, store, env) {
       reply(ack, { ok: true });
     });
 
+    // N-02: client reports the real duration from player.getDuration() once a
+    // track starts playing; the server corrects an unknown (oEmbed) duration.
+    socket.on('player:duration', (raw, ack) => {
+      const ctx = requireMembership(ack);
+      if (!ctx) return;
+      const v = validate(playerDurationSchema, raw);
+      if (!v.ok) return reply(ack, { ok: false, error: v.error });
+
+      const res = store.correctTrackDuration(ctx.room.code, ctx.participant.id, v.data);
+      if (res.error) return reply(ack, { ok: false, code: res.code, error: res.error });
+
+      const serialized = store.serializeRoom(res.room);
+      io.to(ctx.room.code).emit('playback:state', serialized.playback);
+      emitRoomState(res.room);
+      reply(ack, { ok: true, playback: serialized.playback, state: serialized });
+    });
+
     socket.on('player:play', (raw, ack) => {
       const ctx = requireMembership(ack);
       if (!ctx) return;
@@ -439,6 +510,11 @@ export function registerSocketHandlers(io, store, env) {
     socket.on('player:seek', (raw, ack) => {
       const ctx = requireMembership(ack);
       if (!ctx) return;
+      // N-06: scrubber drags can spam seeks — 10/min per participant (N-12:
+      // server-level limiter, survives reconnects).
+      if (!checkParticipantLimit(ctx.participant.id, 'seek', 10)) {
+        return rateLimited(ack, 'seeks');
+      }
       const v = validate(playerSeekSchema, raw);
       if (!v.ok) return reply(ack, { ok: false, error: v.error });
 
@@ -456,7 +532,9 @@ export function registerSocketHandlers(io, store, env) {
     socket.on('player:next', (raw, ack) => {
       const ctx = requireMembership(ack);
       if (!ctx) return;
-      const res = store.stepTrack(ctx.room.code, ctx.participant.id, 1, raw || {});
+      const v = validate(commandSchema, raw);
+      if (!v.ok) return reply(ack, { ok: false, error: v.error });
+      const res = store.stepTrack(ctx.room.code, ctx.participant.id, 1, v.data);
       if (res.error) return reply(ack, { ok: false, code: res.code, error: res.error });
 
       const serialized = store.serializeRoom(res.room);
@@ -474,7 +552,9 @@ export function registerSocketHandlers(io, store, env) {
     socket.on('player:previous', (raw, ack) => {
       const ctx = requireMembership(ack);
       if (!ctx) return;
-      const res = store.stepTrack(ctx.room.code, ctx.participant.id, -1, raw || {});
+      const v = validate(commandSchema, raw);
+      if (!v.ok) return reply(ack, { ok: false, error: v.error });
+      const res = store.stepTrack(ctx.room.code, ctx.participant.id, -1, v.data);
       if (res.error) return reply(ack, { ok: false, code: res.code, error: res.error });
 
       const serialized = store.serializeRoom(res.room);
@@ -577,6 +657,11 @@ export function registerSocketHandlers(io, store, env) {
     socket.on('chat:typing', (_raw, ack) => {
       const ctx = requireMembership(ack);
       if (!ctx) return;
+      // N-11: typing indicators are rate-limited (10/min per participant,
+      // server-level limiter so reconnects do not reset it — N-12).
+      if (!checkParticipantLimit(ctx.participant.id, 'typing', 10)) {
+        return rateLimited(ack, 'typing indicators');
+      }
       socket.to(ctx.room.code).emit('chat:typing', {
         participantId: ctx.participant.id,
         participantName: ctx.participant.name,
@@ -588,8 +673,10 @@ export function registerSocketHandlers(io, store, env) {
     socket.on('queue:clear', (raw, ack) => {
       const ctx = requireMembership(ack);
       if (!ctx) return;
+      const v = validate(commandSchema, raw);
+      if (!v.ok) return reply(ack, { ok: false, error: v.error });
 
-      const res = store.clearQueue(ctx.room.code, ctx.participant.id, raw || {});
+      const res = store.clearQueue(ctx.room.code, ctx.participant.id, v.data);
       if (res.error) return reply(ack, { ok: false, code: res.code, error: res.error });
 
       const serialized = store.serializeRoom(res.room);
@@ -608,7 +695,9 @@ export function registerSocketHandlers(io, store, env) {
     socket.on('chat:send', (raw, ack) => {
       const ctx = requireMembership(ack);
       if (!ctx) return;
-      if (!checkChatRateLimit()) return rateLimited(ack, 'chat messages');
+      if (!checkParticipantLimit(ctx.participant.id, 'chat', 30)) {
+        return rateLimited(ack, 'chat messages');
+      }
       const v = validate(chatSendSchema, raw);
       if (!v.ok) return reply(ack, { ok: false, error: v.error });
 
@@ -622,7 +711,9 @@ export function registerSocketHandlers(io, store, env) {
     socket.on('reaction:send', (raw, ack) => {
       const ctx = requireMembership(ack);
       if (!ctx) return;
-      if (!checkReactionRateLimit()) return rateLimited(ack, 'reactions');
+      if (!checkParticipantLimit(ctx.participant.id, 'reaction', 30)) {
+        return rateLimited(ack, 'reactions');
+      }
       const v = validate(reactionSendSchema, raw);
       if (!v.ok) return reply(ack, { ok: false, error: v.error });
 
@@ -647,10 +738,20 @@ export function registerSocketHandlers(io, store, env) {
       const { roomCode, participantId } = socket.data;
       if (!roomCode || !participantId) return;
 
-      const room = store.markDisconnected(roomCode, participantId, (expiredRoom) => {
+      const emitGraceExpiredState = (expiredRoom) => {
         io.to(expiredRoom.code).emit('room:state', store.serializeRoom(expiredRoom));
         io.to(expiredRoom.code).emit('playback:state', expiredRoom.playback);
-      });
+      };
+      const room = store.markDisconnected(
+        roomCode,
+        participantId,
+        emitGraceExpiredState,
+        // N-15: when a disconnected guest is removed after the grace period,
+        // broadcast the updated room state so the host sees the freed slot.
+        (removedRoom) => {
+          io.to(removedRoom.code).emit('room:state', store.serializeRoom(removedRoom));
+        }
+      );
 
       if (room) {
         io.to(roomCode).emit('connection:status', {

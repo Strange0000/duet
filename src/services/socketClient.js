@@ -20,7 +20,7 @@ export function getSocket() {
   return socketInstance;
 }
 
-export function emitAck(event, payload = {}, timeoutMs = 6000) {
+export function emitAck(event, payload = {}, timeoutMs = 60000) {
   const socket = getSocket();
   if (!socket.connected) {
     socket.connect();

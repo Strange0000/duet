@@ -111,6 +111,17 @@ export default function SpotifyConnectModal({ open, onClose, onConnected, onDisc
             </p>
 
             {!hasEnvClientId && (
+              <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-3.5 text-xs leading-relaxed text-amber-200/90">
+                <strong className="text-amber-100">Spotify needs your own developer app.</strong>{' '}
+                Duet has no built-in Spotify app yet, so full-song Spotify playback here
+                requires the room host&apos;s own Spotify developer app Client ID. A normal
+                Spotify account alone cannot play full songs here yet —{' '}
+                <strong className="text-amber-100">if you don&apos;t have your own Spotify app, use YouTube or Audio Only</strong>{' '}
+                (both free). If you do have an app, paste its Client ID below.
+              </div>
+            )}
+
+            {!hasEnvClientId && (
               <div className="space-y-2 rounded-2xl border border-white/10 bg-white/[0.03] p-3.5">
                 <div className="flex items-center justify-between">
                   <label className="text-[11px] font-bold tracking-wider text-zinc-300 uppercase">
@@ -135,16 +146,20 @@ export default function SpotifyConnectModal({ open, onClose, onConnected, onDisc
                   placeholder="Paste your Spotify Client ID..."
                   className="w-full rounded-xl border border-white/10 bg-zinc-950 px-3 py-2 font-mono text-xs text-white placeholder:text-zinc-600 focus:border-emerald-500/50 focus:outline-none"
                 />
-                <div className="flex items-center justify-between gap-2 pt-1 text-[11px] text-zinc-500">
-                  <span className="truncate">Redirect URI: <code className="text-zinc-300">{redirectUri}</code></span>
-                  <button
-                    type="button"
-                    onClick={handleCopyRedirect}
-                    className="inline-flex shrink-0 items-center gap-1 rounded-full bg-white/5 px-2 py-0.5 text-[10px] font-semibold text-zinc-300 hover:bg-white/10 cursor-pointer"
-                  >
-                    {copiedUri ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
-                    {copiedUri ? 'Copied' : 'Copy'}
-                  </button>
+                <div className="pt-1 text-[11px] text-zinc-500">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-semibold text-zinc-300">Redirect URI</span>
+                    <button
+                      type="button"
+                      onClick={handleCopyRedirect}
+                      className="inline-flex shrink-0 items-center gap-1 rounded-full bg-white/5 px-2 py-0.5 text-[10px] font-semibold text-zinc-300 hover:bg-white/10 cursor-pointer"
+                    >
+                      {copiedUri ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
+                      {copiedUri ? 'Copied' : 'Copy'}
+                    </button>
+                  </div>
+                  <code className="mt-1 block break-all font-mono text-[11px] leading-relaxed text-zinc-300">{redirectUri}</code>
+                  <p className="mt-1">Add this exact URI to your Spotify app&apos;s Redirect URIs in the dashboard.</p>
                 </div>
               </div>
             )}

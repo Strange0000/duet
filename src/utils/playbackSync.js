@@ -36,9 +36,27 @@ export function evaluateDriftCorrection({
   lastCorrectionAtMs = 0,
   consecutiveModerateCount = 0,
   nowMs = Date.now(),
+  // Real player duration in ms (from player.getDuration()). When the player
+  // is within 1500ms of its real end, the track is ending naturally — never
+  // seek it back, or onEnded never fires (N-02 / B2).
+  playerDurationMs = null,
 }) {
   const driftMs = actualMs - expectedMs;
   const absDrift = Math.abs(driftMs);
+
+  if (
+    typeof playerDurationMs === 'number' &&
+    playerDurationMs > 0 &&
+    actualMs >= playerDurationMs - 1500
+  ) {
+    return {
+      action: 'none',
+      driftMs: Math.round(driftMs),
+      absDriftMs: Math.round(absDrift),
+      nextConsecutiveCount: 0,
+      nearEnd: true,
+    };
+  }
 
   if (absDrift < 150) {
     return {

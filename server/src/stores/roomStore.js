@@ -28,25 +28,34 @@ export function generateId(prefix = 'id') {
 }
 
 export class RoomStore {
-  constructor({ ttlMs = 86400000, maxParticipants = 2, hostGraceMs = 30000 } = {}) {
+  constructor({ ttlMs = 86400000, maxParticipants = 2, hostGraceMs = 30000, guestGraceMs = 60000 } = {}) {
     this.rooms = new Map();
     this.tokenIndex = new Map(); // sessionToken -> { roomCode, participantId }
     this.ttlMs = ttlMs;
     this.maxParticipants = maxParticipants;
     this.hostGraceMs = hostGraceMs;
+    this.guestGraceMs = guestGraceMs;
   }
 
   _now() {
     return Date.now();
   }
 
+  // N-02: a durationMs of 0 means "unknown" (e.g. oEmbed lookup without a
+  // YouTube API key). Positions are only clamped when a real duration is known.
+  _clampPositionMs(room, positionMs) {
+    const durationMs = room.playback.durationMs;
+    if (durationMs > 0) return Math.max(0, Math.min(durationMs, positionMs));
+    return Math.max(0, positionMs);
+  }
+
   _computeCurrentPositionMs(room, atServerMs = this._now()) {
     const pb = room.playback;
     if (pb.playbackState !== 'playing') {
-      return Math.max(0, Math.min(pb.durationMs, pb.anchorPositionMs));
+      return this._clampPositionMs(room, pb.anchorPositionMs);
     }
     const elapsed = Math.max(0, atServerMs - pb.anchorServerTimeMs);
-    return Math.max(0, Math.min(pb.durationMs, pb.anchorPositionMs + elapsed));
+    return this._clampPositionMs(room, pb.anchorPositionMs + elapsed);
   }
 
   _canControl(room, participant) {
@@ -150,7 +159,9 @@ export class RoomStore {
     }));
 
     const firstItem = queue[0] || null;
-    const durationMs = firstItem ? Math.round(firstItem.track.durationSec * 1000) : 0;
+    const durationMs = firstItem?.track?.durationSec
+      ? Math.round(firstItem.track.durationSec * 1000)
+      : 0;
 
     const room = {
       code,
@@ -202,7 +213,8 @@ export class RoomStore {
       },
       chat: [],
       stats: {
-        tracksPlayed: firstItem ? 1 : 0,
+        // N-32: nothing has played yet when the room is created.
+        tracksPlayed: 0,
       },
     };
 
@@ -236,9 +248,13 @@ export class RoomStore {
     if (room.participants.size >= this.maxParticipants) {
       return { error: 'Room is full (maximum 2 participants)', code: 'ROOM_FULL' };
     }
-    // Deduplicate by socketId
+    // Deduplicate by socketId, and by (name + source) for the same room (N-29):
+    // a reconnecting guest must not accumulate duplicate pending requests.
     for (const existing of room.pendingJoins.values()) {
-      if (existing.socketId === socketId) {
+      if (
+        existing.socketId === socketId ||
+        (existing.name === name && existing.source === source)
+      ) {
         return { room, request: existing };
       }
     }
@@ -252,6 +268,31 @@ export class RoomStore {
     room.pendingJoins.set(request.id, request);
     this._bumpVersion(room);
     return { room, request };
+  }
+
+  getPendingJoin(roomCode, requestId) {
+    const room = this.getRoom(roomCode);
+    if (!room) return null;
+    return room.pendingJoins.get(requestId) || null;
+  }
+
+  cancelJoinRequest(roomCode, requestId) {
+    const room = this.getRoom(roomCode);
+    if (!room) return null;
+    const request = room.pendingJoins.get(requestId);
+    if (!request) return null;
+    room.pendingJoins.delete(requestId);
+    this._bumpVersion(room);
+    return { room, request };
+  }
+
+  getParticipantBySessionToken(roomCode, sessionToken) {
+    if (!sessionToken) return null;
+    const indexed = this.tokenIndex.get(sessionToken);
+    if (!indexed || indexed.roomCode !== String(roomCode || '').toUpperCase()) return null;
+    const room = this.getRoom(indexed.roomCode);
+    if (!room) return null;
+    return room.participants.get(indexed.participantId) || null;
   }
 
   respondToJoin(roomCode, participantId, { requestId, approve }) {
@@ -296,10 +337,32 @@ export class RoomStore {
     return null;
   }
 
-  joinRoom({ roomCode, name = 'Guest', source = 'youtube' }) {
+  joinRoom({ roomCode, name = 'Guest', source = 'youtube', sessionToken } = {}) {
     const room = this.getRoom(roomCode);
     if (!room) {
       return { error: 'Room not found or expired', code: 'ROOM_NOT_FOUND' };
+    }
+
+    // M4: idempotent rejoin — a sessionToken that already belongs to a
+    // participant in this room reuses that slot (e.g. a guest refreshing the
+    // page) instead of creating a new participant or hitting ROOM_FULL.
+    if (sessionToken) {
+      const existing = this.getParticipantBySessionToken(room.code, sessionToken);
+      if (existing) {
+        existing.connected = true;
+        if (existing.guestGraceTimer) {
+          clearTimeout(existing.guestGraceTimer);
+          existing.guestGraceTimer = null;
+        }
+        this._bumpVersion(room);
+        return {
+          room,
+          participantId: existing.id,
+          sessionToken: existing.sessionToken,
+          role: existing.role,
+          rejoined: true,
+        };
+      }
     }
 
     if (room.participants.size >= this.maxParticipants) {
@@ -308,11 +371,11 @@ export class RoomStore {
 
     const now = this._now();
     const participantId = generateId('usr');
-    const sessionToken = generateSessionToken();
+    const newSessionToken = generateSessionToken();
 
     room.participants.set(participantId, {
       id: participantId,
-      sessionToken,
+      sessionToken: newSessionToken,
       name,
       role: 'guest',
       source,
@@ -325,13 +388,13 @@ export class RoomStore {
       joinedAtMs: now,
     });
 
-    this.tokenIndex.set(sessionToken, { roomCode: room.code, participantId });
+    this.tokenIndex.set(newSessionToken, { roomCode: room.code, participantId });
     this._bumpVersion(room);
 
     return {
       room,
       participantId,
-      sessionToken,
+      sessionToken: newSessionToken,
       role: 'guest',
     };
   }
@@ -357,6 +420,11 @@ export class RoomStore {
       clearTimeout(room.hostGraceTimer);
       room.hostGraceTimer = null;
     }
+    // N-15: a reconnect cancels a pending guest-removal timer.
+    if (participant.guestGraceTimer) {
+      clearTimeout(participant.guestGraceTimer);
+      participant.guestGraceTimer = null;
+    }
 
     this._bumpVersion(room);
     return {
@@ -378,10 +446,14 @@ export class RoomStore {
       clearTimeout(room.hostGraceTimer);
       room.hostGraceTimer = null;
     }
+    if (p.guestGraceTimer) {
+      clearTimeout(p.guestGraceTimer);
+      p.guestGraceTimer = null;
+    }
     return room;
   }
 
-  markDisconnected(roomCode, participantId, onHostGraceExpired) {
+  markDisconnected(roomCode, participantId, onHostGraceExpired, onGuestRemoved) {
     const room = this.getRoom(roomCode);
     if (!room) return null;
     const p = room.participants.get(participantId);
@@ -407,6 +479,25 @@ export class RoomStore {
       }, this.hostGraceMs);
     }
 
+    // N-15: guests get a grace timer too (60s). If they have not reconnected
+    // when it fires, remove them and free their tokenIndex entry so the 2nd
+    // slot opens up again. The host is never removed this way.
+    if (p.role === 'guest' && !p.guestGraceTimer) {
+      p.guestGraceTimer = setTimeout(() => {
+        p.guestGraceTimer = null;
+        const current = this.getRoom(room.code);
+        if (!current) return;
+        const guest = current.participants.get(participantId);
+        if (!guest || guest.connected) return;
+        this.tokenIndex.delete(guest.sessionToken);
+        current.participants.delete(participantId);
+        this._bumpVersion(current);
+        if (onGuestRemoved) onGuestRemoved(current);
+      }, this.guestGraceMs);
+      // Don't let a pending guest-removal timer hold the process open.
+      p.guestGraceTimer.unref?.();
+    }
+
     this._bumpVersion(room);
     return room;
   }
@@ -417,6 +508,10 @@ export class RoomStore {
     const p = room.participants.get(participantId);
     if (!p) return null;
 
+    if (p.guestGraceTimer) {
+      clearTimeout(p.guestGraceTimer);
+      p.guestGraceTimer = null;
+    }
     this.tokenIndex.delete(p.sessionToken);
     room.participants.delete(participantId);
 
@@ -444,10 +539,37 @@ export class RoomStore {
       room.hostGraceTimer = null;
     }
     for (const p of room.participants.values()) {
+      if (p.guestGraceTimer) {
+        clearTimeout(p.guestGraceTimer);
+        p.guestGraceTimer = null;
+      }
       this.tokenIndex.delete(p.sessionToken);
     }
     this.rooms.delete(code);
     return room;
+  }
+
+  // N-02: accept the real track duration reported by a client player
+  // (player:duration). Only a duration in range for the track version that is
+  // currently playing is accepted; anything else is rejected without change.
+  correctTrackDuration(roomCode, participantId, { durationMs, trackVersion } = {}) {
+    const room = this.getRoom(roomCode);
+    if (!room) return { error: 'Room not found', code: 'ROOM_NOT_FOUND' };
+    const p = room.participants.get(participantId);
+    if (!p) return { error: 'Participant not found', code: 'PARTICIPANT_NOT_FOUND' };
+    if (typeof durationMs !== 'number' || durationMs < 15000 || durationMs > 43200000) {
+      return { error: 'Duration must be between 15s and 12h', code: 'INVALID_DURATION' };
+    }
+    if (trackVersion !== room.playback.trackVersion) {
+      return { error: 'Track has changed; duration no longer applies', code: 'VERSION_MISMATCH' };
+    }
+    room.playback.durationMs = Math.round(durationMs);
+    const currentItem = room.queue.find((q) => q.queueItemId === room.currentQueueItemId);
+    if (currentItem) {
+      currentItem.track.durationSec = durationMs / 1000;
+    }
+    this._bumpVersion(room);
+    return { room };
   }
 
   transferHost(roomCode, currentHostId, targetParticipantId, commandId, expectedRoomVersion) {
@@ -526,7 +648,7 @@ export class RoomStore {
     const effectiveAt = now + scheduleLeadMs;
     const anchorPos =
       typeof positionMs === 'number'
-        ? Math.max(0, Math.min(room.playback.durationMs, positionMs))
+        ? this._clampPositionMs(room, positionMs)
         : this._computeCurrentPositionMs(room, now);
 
     room.playback.playbackState = 'playing';
@@ -550,7 +672,7 @@ export class RoomStore {
     const now = this._now();
     const anchorPos =
       typeof positionMs === 'number'
-        ? Math.max(0, Math.min(room.playback.durationMs, positionMs))
+        ? this._clampPositionMs(room, positionMs)
         : this._computeCurrentPositionMs(room, now);
 
     room.playback.playbackState = 'paused';
@@ -572,7 +694,7 @@ export class RoomStore {
     if (check.skip) return { room, skipped: check.reason };
 
     const now = this._now();
-    const clamped = Math.max(0, Math.min(room.playback.durationMs, positionMs));
+    const clamped = this._clampPositionMs(room, positionMs);
     room.playback.anchorPositionMs = clamped;
     room.playback.anchorServerTimeMs = now;
     room.playback.effectiveAtServerMs = now;
@@ -586,7 +708,10 @@ export class RoomStore {
     room.currentQueueItemId = queueItem.queueItemId;
     room.playback.trackId = queueItem.track.id;
     room.playback.trackVersion += 1;
-    room.playback.durationMs = Math.round(queueItem.track.durationSec * 1000);
+    // N-02: unknown duration (null) stays 0 ("unknown") rather than a fake 210s.
+    room.playback.durationMs = queueItem.track.durationSec
+      ? Math.round(queueItem.track.durationSec * 1000)
+      : 0;
     room.playback.anchorPositionMs = 0;
     room.playback.anchorServerTimeMs = now;
     room.playback.effectiveAtServerMs = now;

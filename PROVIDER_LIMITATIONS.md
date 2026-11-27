@@ -9,9 +9,9 @@
   - Bypassing embedding restrictions (`Error 101 / 150`).
 - **Sync Implications**:
   - Different participants may experience different pre-roll/mid-roll ads or network buffering.
-  - When a video disables embedding, Duet displays the error clearly and lets the host pick another track or switch to Local Test Audio.
+  - When a video disables embedding, Duet displays the error clearly and lets the host pick another track or switch to Audio Only.
 - **Discovery**:
-  - Full YouTube search requires `YOUTUBE_API_KEY` on the backend (`server/.env`). Without it, built-in curated tracks and iTunes metadata search remain available, and users can still test deterministic sync using the built-in **Test Audio** player.
+  - Full YouTube search requires `YOUTUBE_API_KEY` on the backend (`server/.env`). Without it, built-in curated tracks and iTunes metadata search remain available, and users can still test deterministic sync using the built-in **Audio Only** player.
 
 ## 2. Spotify (Enabled — Premium, via OAuth PKCE + Web Playback SDK)
 - **Status**: Enabled by default (`ENABLE_SPOTIFY=true`).

@@ -2,7 +2,7 @@
 
 ## Recommended Topology
 - **Backend**: Render Web Service (`server/` root directory) using [render.yaml](render.yaml)
-- **Frontend**: Vercel or Render Static Site (`dist/` output)
+- **Frontend**: Netlify (`https://duet-music.netlify.app/`)
 - **Room state**: In-memory only — rooms are lost on server restart. There is no Redis/Mongo adapter yet, so do not set `REDIS_URL` or `MONGODB_URI`.
 
 ## Backend Environment Variables
