@@ -93,7 +93,14 @@ export const participantUpdateSchema = z.object({
 
 export const roomSettingsSchema = commandBaseSchema.extend({
   allowGuestQueue: z.boolean().optional(),
+  allowGuestControl: z.boolean().optional(),
+  requireApproval: z.boolean().optional(),
   theme: z.enum(['midnight', 'aurora', 'sunset', 'rose', 'ocean', 'minimal']).optional(),
+});
+
+export const joinRespondSchema = commandBaseSchema.extend({
+  requestId: z.string().min(1).max(80),
+  approve: z.boolean(),
 });
 
 export const transferHostSchema = commandBaseSchema.extend({

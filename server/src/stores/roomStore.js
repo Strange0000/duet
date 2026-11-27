@@ -49,6 +49,10 @@ export class RoomStore {
     return Math.max(0, Math.min(pb.durationMs, pb.anchorPositionMs + elapsed));
   }
 
+  _canControl(room, participant) {
+    return Boolean(participant && (participant.role === 'host' || room.settings.allowGuestControl));
+  }
+
   _deriveLifecycleState(room) {
     if (room.closed) return 'Room closed';
     if (this._now() > room.expiresAtMs) return 'Room expired';
@@ -118,6 +122,12 @@ export class RoomStore {
       queue: room.queue.map((item) => ({ ...item })),
       currentQueueItemId: room.currentQueueItemId,
       participants,
+      pendingJoins: Array.from((room.pendingJoins || new Map()).values()).map((r) => ({
+        id: r.id,
+        name: r.name,
+        source: r.source,
+        requestedAtMs: r.requestedAtMs,
+      })),
       chat: room.chat.slice(-MAX_CHAT_MESSAGES),
       stats: {
         tracksPlayed: room.stats.tracksPlayed,
@@ -153,8 +163,11 @@ export class RoomStore {
       processedCommands: new Set(),
       settings: {
         allowGuestQueue: false,
+        allowGuestControl: false,
+        requireApproval: false,
         theme: 'midnight',
       },
+      pendingJoins: new Map(),
       participants: new Map([
         [
           participantId,
@@ -213,6 +226,74 @@ export class RoomStore {
       return null;
     }
     return room;
+  }
+
+  requestJoin({ roomCode, name = 'Guest', source = 'youtube', socketId }) {
+    const room = this.getRoom(roomCode);
+    if (!room) {
+      return { error: 'Room not found or expired', code: 'ROOM_NOT_FOUND' };
+    }
+    if (room.participants.size >= this.maxParticipants) {
+      return { error: 'Room is full (maximum 2 participants)', code: 'ROOM_FULL' };
+    }
+    // Deduplicate by socketId
+    for (const existing of room.pendingJoins.values()) {
+      if (existing.socketId === socketId) {
+        return { room, request: existing };
+      }
+    }
+    const request = {
+      id: generateId('req'),
+      name,
+      source,
+      socketId,
+      requestedAtMs: this._now(),
+    };
+    room.pendingJoins.set(request.id, request);
+    this._bumpVersion(room);
+    return { room, request };
+  }
+
+  respondToJoin(roomCode, participantId, { requestId, approve }) {
+    const room = this.getRoom(roomCode);
+    if (!room) return { error: 'Room not found', code: 'ROOM_NOT_FOUND' };
+    const p = room.participants.get(participantId);
+    if (!this._canControl(room, p)) {
+      return { error: 'Only the host can respond to join requests', code: 'UNAUTHORIZED' };
+    }
+    const request = room.pendingJoins.get(requestId);
+    if (!request) {
+      return { error: 'Join request not found or expired', code: 'NOT_FOUND' };
+    }
+    room.pendingJoins.delete(requestId);
+
+    if (!approve) {
+      this._bumpVersion(room);
+      return { room, approved: false, request };
+    }
+
+    const joined = this.joinRoom({
+      roomCode: room.code,
+      name: request.name,
+      source: request.source,
+    });
+    if (joined.error) {
+      return { error: joined.error, code: joined.code, request };
+    }
+    return { room: joined.room, approved: true, request, joined };
+  }
+
+  removePendingSocket(socketId) {
+    for (const room of this.rooms.values()) {
+      for (const [reqId, req] of room.pendingJoins.entries()) {
+        if (req.socketId === socketId) {
+          room.pendingJoins.delete(reqId);
+          this._bumpVersion(room);
+          return room;
+        }
+      }
+    }
+    return null;
   }
 
   joinRoom({ roomCode, name = 'Guest', source = 'youtube' }) {
@@ -436,7 +517,7 @@ export class RoomStore {
     const room = this.getRoom(roomCode);
     if (!room) return { error: 'Room not found', code: 'ROOM_NOT_FOUND' };
     const p = room.participants.get(participantId);
-    if (!p || p.role !== 'host') return { error: 'Only the host can control playback', code: 'UNAUTHORIZED' };
+    if (!this._canControl(room, p)) return { error: 'Only the host can control playback', code: 'UNAUTHORIZED' };
 
     const check = this._isDuplicateOrStale(room, commandId, expectedRoomVersion);
     if (check.skip) return { room, skipped: check.reason };
@@ -461,7 +542,7 @@ export class RoomStore {
     const room = this.getRoom(roomCode);
     if (!room) return { error: 'Room not found', code: 'ROOM_NOT_FOUND' };
     const p = room.participants.get(participantId);
-    if (!p || p.role !== 'host') return { error: 'Only the host can control playback', code: 'UNAUTHORIZED' };
+    if (!this._canControl(room, p)) return { error: 'Only the host can control playback', code: 'UNAUTHORIZED' };
 
     const check = this._isDuplicateOrStale(room, commandId, expectedRoomVersion);
     if (check.skip) return { room, skipped: check.reason };
@@ -485,7 +566,7 @@ export class RoomStore {
     const room = this.getRoom(roomCode);
     if (!room) return { error: 'Room not found', code: 'ROOM_NOT_FOUND' };
     const p = room.participants.get(participantId);
-    if (!p || p.role !== 'host') return { error: 'Only the host can seek', code: 'UNAUTHORIZED' };
+    if (!this._canControl(room, p)) return { error: 'Only the host can seek', code: 'UNAUTHORIZED' };
 
     const check = this._isDuplicateOrStale(room, commandId, expectedRoomVersion);
     if (check.skip) return { room, skipped: check.reason };
@@ -531,7 +612,7 @@ export class RoomStore {
     const room = this.getRoom(roomCode);
     if (!room) return { error: 'Room not found', code: 'ROOM_NOT_FOUND' };
     const p = room.participants.get(participantId);
-    if (!p || p.role !== 'host') return { error: 'Only the host can skip tracks', code: 'UNAUTHORIZED' };
+    if (!this._canControl(room, p)) return { error: 'Only the host can skip tracks', code: 'UNAUTHORIZED' };
 
     const check = this._isDuplicateOrStale(room, commandId, expectedRoomVersion);
     if (check.skip) return { room, skipped: check.reason };
@@ -547,7 +628,7 @@ export class RoomStore {
     const p = room.participants.get(participantId);
     if (!p) return { error: 'Participant not found', code: 'PARTICIPANT_NOT_FOUND' };
 
-    if (p.role !== 'host' && !room.settings.allowGuestQueue) {
+    if (!this._canControl(room, p) && !room.settings.allowGuestQueue) {
       return { error: 'Guest queue additions are disabled by the host', code: 'UNAUTHORIZED' };
     }
 
@@ -569,7 +650,7 @@ export class RoomStore {
     room.queue.push(item);
 
     if (playNow || !room.currentQueueItemId) {
-      if (p.role === 'host' || !room.currentQueueItemId) {
+      if (this._canControl(room, p) || !room.currentQueueItemId) {
         this._selectQueueItemInternal(room, item, playNow);
       }
     }
@@ -582,7 +663,7 @@ export class RoomStore {
     const room = this.getRoom(roomCode);
     if (!room) return { error: 'Room not found', code: 'ROOM_NOT_FOUND' };
     const p = room.participants.get(participantId);
-    if (!p || p.role !== 'host') return { error: 'Only the host can remove queued tracks', code: 'UNAUTHORIZED' };
+    if (!this._canControl(room, p)) return { error: 'Only the host can remove queued tracks', code: 'UNAUTHORIZED' };
 
     const check = this._isDuplicateOrStale(room, commandId, expectedRoomVersion);
     if (check.skip) return { room, skipped: check.reason };
@@ -615,7 +696,7 @@ export class RoomStore {
     const room = this.getRoom(roomCode);
     if (!room) return { error: 'Room not found', code: 'ROOM_NOT_FOUND' };
     const p = room.participants.get(participantId);
-    if (!p || p.role !== 'host') return { error: 'Only the host can reorder the queue', code: 'UNAUTHORIZED' };
+    if (!this._canControl(room, p)) return { error: 'Only the host can reorder the queue', code: 'UNAUTHORIZED' };
 
     const check = this._isDuplicateOrStale(room, commandId, expectedRoomVersion);
     if (check.skip) return { room, skipped: check.reason };
@@ -639,7 +720,7 @@ export class RoomStore {
     const room = this.getRoom(roomCode);
     if (!room) return { error: 'Room not found', code: 'ROOM_NOT_FOUND' };
     const p = room.participants.get(participantId);
-    if (!p || p.role !== 'host') return { error: 'Only the host can select tracks', code: 'UNAUTHORIZED' };
+    if (!this._canControl(room, p)) return { error: 'Only the host can select tracks', code: 'UNAUTHORIZED' };
 
     const check = this._isDuplicateOrStale(room, commandId, expectedRoomVersion);
     if (check.skip) return { room, skipped: check.reason };
@@ -652,16 +733,18 @@ export class RoomStore {
     return { room };
   }
 
-  updateSettings(roomCode, participantId, { allowGuestQueue, theme, commandId, expectedRoomVersion }) {
+  updateSettings(roomCode, participantId, { allowGuestQueue, allowGuestControl, requireApproval, theme, commandId, expectedRoomVersion }) {
     const room = this.getRoom(roomCode);
     if (!room) return { error: 'Room not found', code: 'ROOM_NOT_FOUND' };
     const p = room.participants.get(participantId);
-    if (!p || p.role !== 'host') return { error: 'Only the host can update room settings', code: 'UNAUTHORIZED' };
+    if (!this._canControl(room, p)) return { error: 'Only the host can update room settings', code: 'UNAUTHORIZED' };
 
     const check = this._isDuplicateOrStale(room, commandId, expectedRoomVersion);
     if (check.skip) return { room, skipped: check.reason };
 
     if (typeof allowGuestQueue === 'boolean') room.settings.allowGuestQueue = allowGuestQueue;
+    if (typeof allowGuestControl === 'boolean') room.settings.allowGuestControl = allowGuestControl;
+    if (typeof requireApproval === 'boolean') room.settings.requireApproval = requireApproval;
     if (theme) room.settings.theme = theme;
     this._bumpVersion(room, commandId);
     return { room };
@@ -671,7 +754,7 @@ export class RoomStore {
     const room = this.getRoom(roomCode);
     if (!room) return { error: 'Room not found', code: 'ROOM_NOT_FOUND' };
     const p = room.participants.get(participantId);
-    if (!p || p.role !== 'host') return { error: 'Only the host can clear the queue', code: 'UNAUTHORIZED' };
+    if (!this._canControl(room, p)) return { error: 'Only the host can clear the queue', code: 'UNAUTHORIZED' };
 
     const check = this._isDuplicateOrStale(room, commandId, expectedRoomVersion);
     if (check.skip) return { room, skipped: check.reason };

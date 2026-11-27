@@ -82,7 +82,7 @@ function PWAInstallBanner() {
 }
 
 function DuetAppShell() {
-  const { roomState, roomError, createRoom, joinRoom } = useRoom();
+  const { roomState, roomError, pendingApproval, createRoom, joinRoom } = useRoom();
   const [demoActive, setDemoActive] = useState(false);
   const [roomLoading, setRoomLoading] = useState(false);
   const [lastRoomCode, setLastRoomCode] = useState(() => {
@@ -173,6 +173,7 @@ function DuetAppShell() {
         lastRoomCode={lastRoomCode}
         roomLoading={roomLoading}
         roomError={roomError}
+        pendingApproval={pendingApproval}
       />
     </Suspense>
   );

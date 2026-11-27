@@ -3,6 +3,7 @@ import {
   ArrowDown,
   ArrowLeft,
   ArrowUp,
+  Bell,
   Check,
   Clock,
   Copy,
@@ -106,16 +107,25 @@ export default function RoomView({ isDemo = false, onLeave }) {
   const [searchError, setSearchError] = useState('');
   const [chatText, setChatText] = useState('');
   const [showSettings, setShowSettings] = useState(false);
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [chatToast, setChatToast] = useState(null);
+  const [notifications, setNotifications] = useState([]);
   const [showMetrics, setShowMetrics] = useState(false);
   const [showPrivacy, setShowPrivacy] = useState(false);
   const [showSessionSummary, setShowSessionSummary] = useState(false);
   const chatTypingTimerRef = useRef(null);
+  const lastSeenChatIdRef = useRef(null);
+  const knownParticipantIdsRef = useRef(null);
+  const knownPendingJoinIdsRef = useRef(new Set());
+  const toastTimerRef = useRef(null);
+  const rightPanelRef = useRef(null);
 
   const ytContainerRef = useRef(null);
 
   // Derived active values
   const roomCode = isDemo ? 'DEMO-K7' : roomState?.roomCode || '------';
   const isHost = isDemo ? demoRole === 'host' : session?.role === 'host';
+  const canControl = isHost || (!isDemo && Boolean(roomState?.settings?.allowGuestControl));
   const mySource = isDemo ? demoSource : myParticipant?.source || 'youtube';
   const audioUnlocked = isDemo ? demoUnlocked : realAudioUnlocked;
   const currentTrack = isDemo ? demoQueue[demoIdx] || demoQueue[0] : realTrack;
@@ -143,8 +153,93 @@ export default function RoomView({ isDemo = false, onLeave }) {
 
   // Clear unread chat count when opening chat tab
   useEffect(() => {
-    if (activeTab === 'chat') setUnreadChatCount(0);
+    if (activeTab === 'chat') {
+      setUnreadChatCount(0);
+      setChatToast(null);
+    }
   }, [activeTab, setUnreadChatCount]);
+
+  // Pop notification toast & record notification when partner sends a message
+  useEffect(() => {
+    if (isDemo || !roomState?.chat?.length) return;
+    const latest = roomState.chat[roomState.chat.length - 1];
+    if (!latest) return;
+
+    if (lastSeenChatIdRef.current === null) {
+      lastSeenChatIdRef.current = latest.id;
+      return;
+    }
+
+    if (latest.id !== lastSeenChatIdRef.current) {
+      lastSeenChatIdRef.current = latest.id;
+      if (latest.senderId !== session?.participantId) {
+        setNotifications((prev) => [{ type: 'chat', ...latest }, ...prev].slice(0, 15));
+        if (activeTab !== 'chat') {
+          setChatToast({ type: 'chat', ...latest });
+          if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+          toastTimerRef.current = setTimeout(() => setChatToast(null), 5000);
+        }
+      }
+    }
+  }, [isDemo, roomState?.chat, session?.participantId, activeTab]);
+
+  // Notify when a partner joins or requests to join
+  useEffect(() => {
+    if (isDemo || !roomState) return;
+
+    // 1. Pending join requests (when requireApproval is enabled)
+    const pending = roomState.pendingJoins || [];
+    for (const req of pending) {
+      if (!knownPendingJoinIdsRef.current.has(req.id)) {
+        knownPendingJoinIdsRef.current.add(req.id);
+        setChatToast({ type: 'join_request', ...req });
+        if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+        toastTimerRef.current = setTimeout(() => setChatToast(null), 15000);
+      }
+    }
+
+    // 2. Partner joined directly
+    const currentIds = new Set((roomState.participants || []).map((p) => p.id));
+    if (knownParticipantIdsRef.current === null) {
+      knownParticipantIdsRef.current = currentIds;
+      return;
+    }
+    for (const p of roomState.participants || []) {
+      if (!knownParticipantIdsRef.current.has(p.id) && p.id !== session?.participantId) {
+        const note = {
+          id: `join_${p.id}_${Date.now()}`,
+          type: 'joined',
+          senderName: p.name,
+          text: `${p.name} joined the room`,
+        };
+        setNotifications((prev) => [note, ...prev].slice(0, 15));
+        setChatToast(note);
+        if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+        toastTimerRef.current = setTimeout(() => setChatToast(null), 5000);
+      }
+    }
+    knownParticipantIdsRef.current = currentIds;
+  }, [isDemo, roomState, session?.participantId]);
+
+  // Close notification popover on outside click
+  useEffect(() => {
+    if (!showNotifications) return;
+    const onDown = (e) => {
+      if (!e.target.closest('[data-notifications-menu]')) setShowNotifications(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [showNotifications]);
+
+  const openChatFromNotification = () => {
+    setActiveTab('chat');
+    setUnreadChatCount(0);
+    setChatToast(null);
+    setShowNotifications(false);
+    setTimeout(() => {
+      rightPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }, 50);
+  };
 
   // Debounced search
   useEffect(() => {
@@ -234,7 +329,7 @@ export default function RoomView({ isDemo = false, onLeave }) {
   };
 
   const handlePlayPause = async () => {
-    if (!isHost) return;
+    if (!canControl) return;
     if (isDemo) {
       setDemoPlaying((p) => !p);
       return;
@@ -247,7 +342,7 @@ export default function RoomView({ isDemo = false, onLeave }) {
   };
 
   const handleSeek = async (e) => {
-    if (!isHost) return;
+    if (!canControl) return;
     const sec = Number(e.target.value);
     if (isDemo) {
       setDemoTime(sec);
@@ -257,7 +352,7 @@ export default function RoomView({ isDemo = false, onLeave }) {
   };
 
   const handleStep = async (dir) => {
-    if (!isHost) return;
+    if (!canControl) return;
     if (isDemo) {
       setDemoIdx((i) => (i + dir + demoQueue.length) % demoQueue.length);
       setDemoTime(0);
@@ -402,6 +497,85 @@ export default function RoomView({ isDemo = false, onLeave }) {
         </div>
       )}
 
+      {/* Pop-up Incoming Message / Join Notification */}
+      {chatToast && (
+        <div className="fixed top-20 right-4 z-50 w-80 max-w-[calc(100vw-2rem)] animate-fade-up sm:right-6">
+          {chatToast.type === 'join_request' ? (
+            <div className="rounded-2xl border border-violet-500/40 bg-zinc-900/95 p-3.5 shadow-2xl backdrop-blur-xl">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <p className="text-xs font-bold text-white">{chatToast.name} wants to join</p>
+                  <p className="mt-0.5 text-[11px] text-zinc-400">Source: {chatToast.source}</p>
+                </div>
+                <button
+                  onClick={() => setChatToast(null)}
+                  className="shrink-0 text-zinc-500 hover:text-white cursor-pointer"
+                  aria-label="Dismiss"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+              <div className="mt-3 flex gap-2">
+                <button
+                  onClick={() => {
+                    sendCommand('room:join-respond', { requestId: chatToast.id, approve: false });
+                    setChatToast(null);
+                  }}
+                  className="flex-1 rounded-full border border-white/10 bg-white/5 py-1.5 text-xs font-semibold text-zinc-300 hover:bg-white/10 cursor-pointer"
+                >
+                  Decline
+                </button>
+                <button
+                  onClick={() => {
+                    sendCommand('room:join-respond', { requestId: chatToast.id, approve: true });
+                    setChatToast(null);
+                  }}
+                  className="flex-1 rounded-full bg-violet-600 py-1.5 text-xs font-semibold text-white hover:bg-violet-700 cursor-pointer"
+                >
+                  Accept
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div
+              onClick={chatToast.type === 'joined' ? () => setChatToast(null) : openChatFromNotification}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  if (chatToast.type === 'joined') setChatToast(null);
+                  else openChatFromNotification();
+                }
+              }}
+              className="flex cursor-pointer items-start gap-3 rounded-2xl border border-violet-500/30 bg-zinc-900/95 p-3.5 shadow-2xl backdrop-blur-xl transition hover:border-violet-400/50 hover:bg-zinc-900"
+            >
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-violet-600/20 text-violet-400">
+                <MessageCircle className="h-4 w-4" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="truncate text-xs font-bold text-white">{chatToast.senderName}</p>
+                  {chatToast.type !== 'joined' && (
+                    <span className="text-[10px] font-medium text-violet-400">Tap to reply</span>
+                  )}
+                </div>
+                <p className="mt-0.5 line-clamp-2 text-xs text-zinc-300">{chatToast.text}</p>
+              </div>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setChatToast(null);
+                }}
+                className="shrink-0 text-zinc-500 hover:text-white cursor-pointer"
+                aria-label="Dismiss notification"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Floating Live Reactions */}
       <div className="pointer-events-none fixed right-6 bottom-24 z-50 flex flex-col items-end gap-2">
         {reactions.map((r) => (
@@ -478,13 +652,110 @@ export default function RoomView({ isDemo = false, onLeave }) {
             </button>
 
             {!isDemo && (
-              <button
-                onClick={() => setShowSettings((s) => !s)}
-                className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-white/5 text-zinc-300 transition hover:bg-white/10 cursor-pointer"
-                aria-label="Room settings"
-              >
-                <Settings className="h-4 w-4" />
-              </button>
+              <div className="relative flex items-center gap-2" data-notifications-menu>
+                <button
+                  onClick={() => {
+                    setShowNotifications((n) => !n);
+                    setShowSettings(false);
+                  }}
+                  className="relative inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-white/5 text-zinc-300 transition hover:bg-white/10 cursor-pointer"
+                  aria-label="Notifications"
+                  title="Notifications"
+                >
+                  <Bell className="h-4 w-4" />
+                  {(unreadChatCount + (roomState?.pendingJoins?.length || 0)) > 0 && (
+                    <span className="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-bold text-white">
+                      {unreadChatCount + (roomState?.pendingJoins?.length || 0) > 9
+                        ? '9+'
+                        : unreadChatCount + (roomState?.pendingJoins?.length || 0)}
+                    </span>
+                  )}
+                </button>
+
+                {showNotifications && (
+                  <div className="absolute top-11 right-0 z-50 w-72 overflow-hidden rounded-2xl border border-white/10 bg-zinc-900 p-2 shadow-2xl backdrop-blur-xl sm:w-80">
+                    <div className="flex items-center justify-between px-3 py-2">
+                      <span className="text-[11px] font-bold tracking-widest text-zinc-500 uppercase">Notifications</span>
+                      {notifications.length > 0 && (
+                        <button
+                          onClick={() => {
+                            setNotifications([]);
+                            setUnreadChatCount(0);
+                          }}
+                          className="text-[11px] font-semibold text-zinc-400 hover:text-white cursor-pointer"
+                        >
+                          Clear
+                        </button>
+                      )}
+                    </div>
+
+                    {(roomState?.pendingJoins || []).length > 0 && (
+                      <div className="mb-2 space-y-1.5 border-b border-white/5 pb-2">
+                        {roomState.pendingJoins.map((req) => (
+                          <div key={req.id} className="rounded-xl bg-violet-500/10 p-2.5">
+                            <p className="text-xs font-bold text-white">{req.name} wants to join</p>
+                            <p className="text-[11px] text-zinc-400">Source: {req.source}</p>
+                            <div className="mt-2 flex gap-2">
+                              <button
+                                onClick={() => sendCommand('room:join-respond', { requestId: req.id, approve: false })}
+                                className="flex-1 rounded-full bg-white/5 py-1 text-[11px] font-semibold text-zinc-300 hover:bg-white/10 cursor-pointer"
+                              >
+                                Decline
+                              </button>
+                              <button
+                                onClick={() => sendCommand('room:join-respond', { requestId: req.id, approve: true })}
+                                className="flex-1 rounded-full bg-violet-600 py-1 text-[11px] font-semibold text-white hover:bg-violet-700 cursor-pointer"
+                              >
+                                Accept
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {notifications.length === 0 && (roomState?.pendingJoins || []).length === 0 ? (
+                      <p className="px-3 py-6 text-center text-xs text-zinc-500">No new notifications</p>
+                    ) : (
+                      <div className="max-h-64 space-y-1 overflow-y-auto">
+                        {notifications.map((n) => (
+                          <button
+                            key={n.id}
+                            onClick={() => {
+                              if (n.type === 'joined') setShowNotifications(false);
+                              else openChatFromNotification();
+                            }}
+                            className="flex w-full items-start gap-2.5 rounded-xl px-3 py-2 text-left transition hover:bg-white/5 cursor-pointer"
+                          >
+                            <MessageCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-violet-400" />
+                            <div className="min-w-0 flex-1">
+                              <p className="truncate text-xs font-bold text-white">{n.senderName}</p>
+                              <p className="truncate text-xs text-zinc-400">{n.text}</p>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    <button
+                      onClick={openChatFromNotification}
+                      className="mt-1 w-full rounded-xl bg-white/5 py-2 text-xs font-semibold text-violet-300 transition hover:bg-white/10 cursor-pointer"
+                    >
+                      Open Chat
+                    </button>
+                  </div>
+                )}
+
+                <button
+                  onClick={() => {
+                    setShowSettings((s) => !s);
+                    setShowNotifications(false);
+                  }}
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-white/5 text-zinc-300 transition hover:bg-white/10 cursor-pointer"
+                  aria-label="Room settings"
+                >
+                  <Settings className="h-4 w-4" />
+                </button>
+              </div>
             )}
 
             {/* Demo-only perspective switcher */}
@@ -545,7 +816,7 @@ export default function RoomView({ isDemo = false, onLeave }) {
                 {Object.keys(THEME_STYLES).map((t) => (
                   <button
                     key={t}
-                    disabled={!isHost}
+                    disabled={!canControl}
                     onClick={() => sendCommand('room:settings', { theme: t })}
                     className={`rounded-full px-3 py-1 text-xs font-semibold capitalize transition cursor-pointer disabled:opacity-50 ${
                       theme === t ? 'bg-white text-zinc-950' : 'bg-white/5 text-zinc-300 hover:bg-white/10'
@@ -556,45 +827,71 @@ export default function RoomView({ isDemo = false, onLeave }) {
                 ))}
               </div>
 
-              {isHost && (
-                <div className="flex flex-wrap items-center gap-3">
-                  <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={Boolean(roomState?.settings?.allowGuestQueue)}
-                      onChange={(e) =>
-                        sendCommand('room:settings', { allowGuestQueue: e.target.checked })
-                      }
-                      className="accent-violet-500"
-                    />
-                    Allow guest to add songs
-                  </label>
-                  {partnerParticipant && (
-                    <button
-                      onClick={() =>
-                        sendCommand('room:transfer-host', {
-                          targetParticipantId: partnerParticipant.id,
-                        })
-                      }
-                      className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold text-zinc-300 hover:bg-white/10 cursor-pointer"
-                    >
-                      Make {partnerParticipant.name} Host
-                    </button>
-                  )}
+              <div className="flex flex-wrap items-center gap-3">
+                {canControl && (
+                  <>
+                    <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(roomState?.settings?.allowGuestQueue)}
+                        onChange={(e) =>
+                          sendCommand('room:settings', { allowGuestQueue: e.target.checked })
+                        }
+                        className="accent-violet-500"
+                      />
+                      Allow guest to add songs
+                    </label>
+                    <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(roomState?.settings?.allowGuestControl)}
+                        onChange={(e) =>
+                          sendCommand('room:settings', { allowGuestControl: e.target.checked })
+                        }
+                        className="accent-violet-500"
+                      />
+                      Allow guest full control
+                    </label>
+                    <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(roomState?.settings?.requireApproval)}
+                        onChange={(e) =>
+                          sendCommand('room:settings', { requireApproval: e.target.checked })
+                        }
+                        className="accent-violet-500"
+                      />
+                      Require approval to join
+                    </label>
+                  </>
+                )}
+                <button
+                  onClick={() => setShowPrivacy(true)}
+                  className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold text-zinc-300 hover:bg-white/10 cursor-pointer"
+                >
+                  <Shield className="h-3 w-3" /> Privacy
+                </button>
+                {isHost && partnerParticipant && (
                   <button
-                    onClick={() => setShowPrivacy(true)}
-                    className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold text-zinc-300 hover:bg-white/10 cursor-pointer"
+                    onClick={() =>
+                      sendCommand('room:transfer-host', {
+                        targetParticipantId: partnerParticipant.id,
+                      })
+                    }
+                    className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold text-zinc-300 hover:bg-white/10 cursor-pointer"
                   >
-                    <Shield className="h-3 w-3" /> Privacy
+                    Make {partnerParticipant.name} Host
                   </button>
+                )}
+                {isHost && (
                   <button
                     onClick={() => sendCommand('room:close', {})}
                     className="rounded-full bg-rose-600/20 px-3 py-1 text-xs font-semibold text-rose-300 hover:bg-rose-600/30 cursor-pointer"
                   >
                     End Room
                   </button>
-                </div>
-              )}
+                )}
+              </div>
             </div>
           </div>
         )}
@@ -752,11 +1049,11 @@ export default function RoomView({ isDemo = false, onLeave }) {
                     min={0}
                     max={durationSec}
                     value={currentSec}
-                    disabled={!isHost}
+                    disabled={!canControl}
                     onChange={handleSeek}
                     aria-label="Track progress"
                     className={`h-1.5 w-full appearance-none rounded-full accent-white ${
-                      isHost ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'
+                      canControl ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'
                     }`}
                     style={{
                       background: `linear-gradient(to right, #fff ${progressPct}%, #3f3f46 ${progressPct}%)`,
@@ -772,7 +1069,7 @@ export default function RoomView({ isDemo = false, onLeave }) {
               {/* Transport */}
               <div className="mt-6 grid grid-cols-3 items-center gap-2">
                 <div className="flex items-center">
-                  {!isHost && (
+                  {!canControl && (
                     <span className="inline-flex items-center gap-1.5 rounded-full bg-white/5 px-3 py-1 text-xs font-medium text-zinc-400">
                       <Lock className="h-3 w-3 shrink-0" />
                       <span className="hidden sm:inline">Host controls</span>
@@ -780,13 +1077,13 @@ export default function RoomView({ isDemo = false, onLeave }) {
                   )}
                 </div>
                 <div className="flex items-center justify-center gap-3">
-                  <button onClick={() => handleStep(-1)} disabled={!isHost} aria-label="Previous" className="flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-white/5 text-zinc-300 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer">
+                  <button onClick={() => handleStep(-1)} disabled={!canControl} aria-label="Previous" className="flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-white/5 text-zinc-300 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer">
                     <SkipBack className="h-4 w-4" />
                   </button>
-                  <button onClick={handlePlayPause} disabled={!isHost} aria-label={isPlaying ? 'Pause' : 'Play'} className="flex h-14 w-14 items-center justify-center rounded-full bg-white text-zinc-950 shadow-lg transition-all hover:bg-zinc-200 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer">
+                  <button onClick={handlePlayPause} disabled={!canControl} aria-label={isPlaying ? 'Pause' : 'Play'} className="flex h-14 w-14 items-center justify-center rounded-full bg-white text-zinc-950 shadow-lg transition-all hover:bg-zinc-200 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer">
                     {isPlaying ? <Pause className="h-5 w-5 fill-current" /> : <Play className="h-5 w-5 translate-x-0.5 fill-current" />}
                   </button>
-                  <button onClick={() => handleStep(1)} disabled={!isHost} aria-label="Next" className="flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-white/5 text-zinc-300 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer">
+                  <button onClick={() => handleStep(1)} disabled={!canControl} aria-label="Next" className="flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-white/5 text-zinc-300 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer">
                     <SkipForward className="h-4 w-4" />
                   </button>
                 </div>
@@ -880,7 +1177,7 @@ export default function RoomView({ isDemo = false, onLeave }) {
           </div>
 
           {/* Right: Queue, Search & Private Chat */}
-          <div className="lg:col-span-5">
+          <div ref={rightPanelRef} className="lg:col-span-5">
             <div className="flex flex-col rounded-3xl border border-white/5 bg-white/[0.02] p-5 sm:p-6">
               <div className="flex items-center justify-between border-b border-white/5 pb-4">
                 <div className="inline-flex rounded-full bg-white/5 p-1">
@@ -977,7 +1274,7 @@ export default function RoomView({ isDemo = false, onLeave }) {
 
               {activeTab === 'queue' && (
                 <div className="mt-4 space-y-2 overflow-y-auto pr-1" style={{ maxHeight: 470 }}>
-                  {isHost && queue.length > 0 && !isDemo && (
+                  {canControl && queue.length > 0 && !isDemo && (
                     <div className="flex justify-end pb-1">
                       <button
                         onClick={handleClearQueue}
@@ -994,7 +1291,7 @@ export default function RoomView({ isDemo = false, onLeave }) {
                       <div
                         key={item.queueItemId}
                         onClick={() => {
-                          if (!isHost) return;
+                          if (!canControl) return;
                           if (isDemo) {
                             setDemoIdx(idx);
                             setDemoTime(0);
@@ -1005,7 +1302,7 @@ export default function RoomView({ isDemo = false, onLeave }) {
                         }}
                         className={`group flex items-center justify-between gap-3 rounded-2xl p-2.5 transition ${
                           isCurr ? 'bg-white text-zinc-950 shadow-sm' : 'border border-white/5 bg-white/[0.02] hover:bg-white/[0.04]'
-                        } ${isHost ? 'cursor-pointer' : ''}`}
+                        } ${canControl ? 'cursor-pointer' : ''}`}
                       >
                         <div className="flex min-w-0 items-center gap-3">
                           <div className="relative h-11 w-11 shrink-0 overflow-hidden rounded-xl">
@@ -1028,7 +1325,7 @@ export default function RoomView({ isDemo = false, onLeave }) {
                           </div>
                         </div>
 
-                        {isHost && !isDemo && (
+                        {canControl && !isDemo && (
                           <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
                             {idx > 0 && (
                               <button

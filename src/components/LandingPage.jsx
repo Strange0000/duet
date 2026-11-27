@@ -114,6 +114,7 @@ export default function LandingPage({
   lastRoomCode,
   roomLoading,
   roomError,
+  pendingApproval,
 }) {
   const [joinCode, setJoinCode] = useState('');
   const [joinErr, setJoinErr] = useState('');
@@ -327,6 +328,12 @@ export default function LandingPage({
                 </form>
               </div>
               {(joinErr || roomError) && <p className="mt-2 text-xs font-medium text-rose-400">{joinErr || roomError}</p>}
+              {pendingApproval && (
+                <div className="mt-3 inline-flex items-center gap-2 rounded-full border border-violet-500/30 bg-violet-500/15 px-4 py-1.5 text-xs font-semibold text-violet-200">
+                  <span className="h-2 w-2 animate-pulse rounded-full bg-violet-400" />
+                  Waiting for host approval to join {pendingApproval.roomCode}…
+                </div>
+              )}
 
               <div className="animate-fade-up-d2 mt-4 flex flex-wrap items-center justify-center gap-4">
                 <button onClick={onOpenDemo} className="text-xs font-semibold text-zinc-500 underline decoration-zinc-700 underline-offset-4 transition hover:text-white cursor-pointer">

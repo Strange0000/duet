@@ -1,6 +1,7 @@
 import {
   chatSendSchema,
   createRoomSchema,
+  joinRespondSchema,
   joinRoomSchema,
   participantUpdateSchema,
   playerPauseSchema,
@@ -144,6 +145,28 @@ export function registerSocketHandlers(io, store, env) {
         v.data.source = 'youtube';
       }
 
+      const targetRoom = store.getRoom(v.data.roomCode);
+      if (targetRoom?.settings?.requireApproval) {
+        const reqRes = store.requestJoin({ ...v.data, socketId: socket.id });
+        if (reqRes.error) {
+          socket.emit('room:error', { code: reqRes.code, error: reqRes.error });
+          return reply(ack, { ok: false, code: reqRes.code, error: reqRes.error });
+        }
+        io.to(reqRes.room.code).emit('room:join-request', {
+          id: reqRes.request.id,
+          name: reqRes.request.name,
+          source: reqRes.request.source,
+          requestedAtMs: reqRes.request.requestedAtMs,
+        });
+        emitRoomState(reqRes.room);
+        return reply(ack, {
+          ok: true,
+          pendingApproval: true,
+          roomCode: reqRes.room.code,
+          requestId: reqRes.request.id,
+        });
+      }
+
       const joined = store.joinRoom(v.data);
       if (joined.error) {
         socket.emit('room:error', { code: joined.code, error: joined.error });
@@ -170,6 +193,53 @@ export function registerSocketHandlers(io, store, env) {
       });
       emitRoomState(joined.room);
       reply(ack, result);
+    });
+
+    socket.on('room:join-respond', (raw, ack) => {
+      const ctx = requireMembership(ack);
+      if (!ctx) return;
+      const v = validate(joinRespondSchema, raw);
+      if (!v.ok) return reply(ack, { ok: false, error: v.error });
+
+      const res = store.respondToJoin(ctx.room.code, ctx.participant.id, v.data);
+      if (res.error) return reply(ack, { ok: false, code: res.code, error: res.error });
+
+      const guestSocket = res.request?.socketId ? io.sockets.sockets.get(res.request.socketId) : null;
+
+      if (res.approved && res.joined) {
+        if (guestSocket) {
+          store.attachSocket(res.room.code, res.joined.participantId, guestSocket.id);
+          guestSocket.data.roomCode = res.room.code;
+          guestSocket.data.participantId = res.joined.participantId;
+          guestSocket.join(res.room.code);
+        }
+        const serialized = store.serializeRoom(res.room);
+        const result = {
+          ok: true,
+          roomCode: res.room.code,
+          participantId: res.joined.participantId,
+          sessionToken: res.joined.sessionToken,
+          role: res.joined.role,
+          state: serialized,
+        };
+        if (guestSocket) {
+          guestSocket.emit('room:joined', result);
+        }
+        io.to(res.room.code).emit('participant:joined', {
+          participant: serialized.participants.find((p) => p.id === res.joined.participantId),
+        });
+        emitRoomState(res.room);
+        return reply(ack, { ok: true, approved: true, state: serialized });
+      }
+
+      if (guestSocket) {
+        guestSocket.emit('room:join-declined', {
+          roomCode: res.room.code,
+          error: 'Host declined your join request',
+        });
+      }
+      emitRoomState(res.room);
+      reply(ack, { ok: true, approved: false, state: store.serializeRoom(res.room) });
     });
 
     socket.on('room:reconnect', (raw, ack) => {
@@ -558,6 +628,11 @@ export function registerSocketHandlers(io, store, env) {
 
     // ——— Disconnect ———
     socket.on('disconnect', () => {
+      const pendingRoom = store.removePendingSocket(socket.id);
+      if (pendingRoom) {
+        emitRoomState(pendingRoom);
+      }
+
       const { roomCode, participantId } = socket.data;
       if (!roomCode || !participantId) return;
 

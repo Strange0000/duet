@@ -47,6 +47,7 @@ export function RoomProvider({ children }) {
   const [roomState, setRoomState] = useState(null);
   const [session, setSession] = useState(null); // { roomCode, participantId, sessionToken, role }
   const [connectionStatus, setConnectionStatus] = useState('disconnected'); // 'disconnected' | 'connecting' | 'connected' | 'reconnecting'
+  const [pendingApproval, setPendingApproval] = useState(null); // { roomCode, requestId }
   const [roomError, setRoomError] = useState(null);
   const [playerError, setPlayerError] = useState(null);
   const [audioUnlocked, setAudioUnlocked] = useState(false);
@@ -312,14 +313,38 @@ export function RoomProvider({ children }) {
 
     const onRoomClosed = ({ reason }) => {
       setRoomError(reason || 'Room closed');
+      setPendingApproval(null);
       setRoomState(null);
       setSession(null);
       clearSession();
     };
 
+    const onRoomJoined = (res) => {
+      if (!res?.ok) return;
+      const nextSession = {
+        roomCode: res.roomCode,
+        participantId: res.participantId,
+        sessionToken: res.sessionToken,
+        role: res.role,
+      };
+      setPendingApproval(null);
+      setSession(nextSession);
+      saveSession(nextSession);
+      setRoomState(res.state);
+      setAudioUnlocked(false);
+      runClockSync();
+    };
+
+    const onJoinDeclined = ({ error }) => {
+      setPendingApproval(null);
+      setRoomError(error || 'Host declined your join request');
+    };
+
     socket.on('connect', onConnect);
     socket.on('disconnect', onDisconnect);
     socket.on('room:state', onRoomState);
+    socket.on('room:joined', onRoomJoined);
+    socket.on('room:join-declined', onJoinDeclined);
     socket.on('playback:state', onPlaybackState);
     socket.on('playback:scheduled', onPlaybackState);
     socket.on('queue:updated', onQueueUpdated);
@@ -332,6 +357,8 @@ export function RoomProvider({ children }) {
       socket.off('connect', onConnect);
       socket.off('disconnect', onDisconnect);
       socket.off('room:state', onRoomState);
+      socket.off('room:joined', onRoomJoined);
+      socket.off('room:join-declined', onJoinDeclined);
       socket.off('playback:state', onPlaybackState);
       socket.off('playback:scheduled', onPlaybackState);
       socket.off('queue:updated', onQueueUpdated);
@@ -456,6 +483,11 @@ export function RoomProvider({ children }) {
       throw new Error(res?.error || 'Failed to join room');
     }
 
+    if (res.pendingApproval) {
+      setPendingApproval({ roomCode: res.roomCode, requestId: res.requestId });
+      return res;
+    }
+
     const nextSession = {
       roomCode: res.roomCode,
       participantId: res.participantId,
@@ -521,6 +553,7 @@ export function RoomProvider({ children }) {
     partnerParticipant,
     currentTrack,
     connectionStatus,
+    pendingApproval,
     roomError,
     playerError,
     audioUnlocked,

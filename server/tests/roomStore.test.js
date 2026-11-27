@@ -115,4 +115,56 @@ describe('RoomStore unit tests', () => {
     expect(removed).toBe(1);
     expect(shortStore.getRoom(host.room.code)).toBeNull();
   });
+
+  it('allows guest to control playback, queue, and settings when allowGuestControl is enabled', () => {
+    const host = store.createRoom({ name: 'Host', initialTracks: [sampleTrack] });
+    const guest = store.joinRoom({ roomCode: host.room.code, name: 'Guest' });
+
+    // Blocked by default
+    expect(store.play(host.room.code, guest.participantId).code).toBe('UNAUTHORIZED');
+    expect(store.updateSettings(host.room.code, guest.participantId, { theme: 'aurora' }).code).toBe('UNAUTHORIZED');
+
+    // Host enables allowGuestControl
+    const settingsRes = store.updateSettings(host.room.code, host.participantId, {
+      allowGuestControl: true,
+    });
+    expect(settingsRes.room.settings.allowGuestControl).toBe(true);
+
+    // Guest can now control playback, queue, and settings
+    const playRes = store.play(host.room.code, guest.participantId, { positionMs: 5000 });
+    expect(playRes.error).toBeUndefined();
+    expect(playRes.room.playback.playbackState).toBe('playing');
+
+    const addRes = store.addToQueue(host.room.code, guest.participantId, { track: secondTrack });
+    expect(addRes.error).toBeUndefined();
+    expect(addRes.room.queue).toHaveLength(2);
+
+    const guestSettings = store.updateSettings(host.room.code, guest.participantId, { theme: 'aurora' });
+    expect(guestSettings.error).toBeUndefined();
+    expect(guestSettings.room.settings.theme).toBe('aurora');
+  });
+
+  it('queues join requests when requireApproval is enabled and lets host accept or decline', () => {
+    const host = store.createRoom({ name: 'Host', initialTracks: [sampleTrack] });
+    store.updateSettings(host.room.code, host.participantId, { requireApproval: true });
+
+    const req1 = store.requestJoin({ roomCode: host.room.code, name: 'Guest1', socketId: 'sock-1' });
+    expect(req1.request.name).toBe('Guest1');
+    expect(store.serializeRoom(req1.room).pendingJoins).toHaveLength(1);
+
+    const declined = store.respondToJoin(host.room.code, host.participantId, {
+      requestId: req1.request.id,
+      approve: false,
+    });
+    expect(declined.approved).toBe(false);
+    expect(store.serializeRoom(declined.room).participants).toHaveLength(1);
+
+    const req2 = store.requestJoin({ roomCode: host.room.code, name: 'Guest2', socketId: 'sock-2' });
+    const approved = store.respondToJoin(host.room.code, host.participantId, {
+      requestId: req2.request.id,
+      approve: true,
+    });
+    expect(approved.approved).toBe(true);
+    expect(store.serializeRoom(approved.room).participants).toHaveLength(2);
+  });
 });
