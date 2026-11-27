@@ -259,7 +259,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
     ? demoPlaying
     : ctxPlayerState === 'playing' || ctxPlayerState === 'buffering'
       ? true
-      : ctxPlayerState === 'paused' || ctxPlayerState === 'ended'
+      : ctxPlayerState === 'paused' || ctxPlayerState === 'ended' || ctxPlayerState === 'error'
         ? false
         : serverPlaying;
   // R5 + flicker: prefer the server playback duration (set atomically with
@@ -754,8 +754,11 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
       setChatText('');
       return;
     }
-    setChatText('');
-    await sendCommand('chat:send', { text: txt });
+    // F2: only clear the text once the message actually sent. Before this
+    // the text was cleared first, so a message that failed in the refresh /
+    // reconnect race was lost forever and the guest's chat stayed empty.
+    const res = await sendCommand('chat:send', { text: txt });
+    if (res?.ok) setChatText('');
   };
 
   const handleClearQueue = async () => {
@@ -1079,7 +1082,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                 {isDemo
                   ? 'Simulated'
                   : ctxSyncStatus
-                    ? { waiting: 'Waiting for partner', buffering: 'Buffering', 'in-sync': 'In sync', paused: 'Paused', syncing: 'Syncing' }[ctxSyncStatus] || ctxSyncStatus
+                    ? { waiting: 'Waiting for partner', buffering: 'Buffering', 'in-sync': 'In sync', paused: 'Paused', syncing: 'Syncing', error: 'Playback error' }[ctxSyncStatus] || ctxSyncStatus
                     : !partnerParticipant
                       ? 'Waiting for partner'
                       : roomState?.lifecycleState || connectionStatus}
@@ -1355,6 +1358,17 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                   className="rounded-full bg-white/15 px-3 py-1 font-semibold text-white hover:bg-white/25 cursor-pointer"
                 >
                   Find Embeddable Version
+                </button>
+              )}
+              {playerError?.isEmbedBlocked && canControl && (
+                <button
+                  onClick={async () => {
+                    setPlayerError(null);
+                    await sendCommand('player:next', {});
+                  }}
+                  className="rounded-full bg-emerald-600 px-3 py-1 font-semibold text-white hover:bg-emerald-700 cursor-pointer"
+                >
+                  Play next song
                 </button>
               )}
               <button

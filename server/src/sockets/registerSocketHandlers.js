@@ -221,6 +221,16 @@ export function registerSocketHandlers(io, store, env) {
       socket.data.participantId = joined.participantId;
       socket.join(joined.room.code);
 
+      // F2: a positive presence signal — the disconnect handler only ever
+      // emits connected:false, so after a refresh the host kept showing
+      // "Disconnected" until the guest produced traffic (which needs audio
+      // unlocked first). Emit connected:true on adoption so the host's
+      // derived presence recovers immediately.
+      io.to(joined.room.code).emit('connection:status', {
+        participantId: joined.participantId,
+        connected: true,
+      });
+
       const serialized = store.serializeRoom(joined.room);
       const result = {
         ok: true,
@@ -318,6 +328,14 @@ export function registerSocketHandlers(io, store, env) {
       socket.data.roomCode = rec.room.code;
       socket.data.participantId = rec.participantId;
       socket.join(rec.room.code);
+
+      // F2: positive presence signal — see room:join above. A refreshed
+      // guest's re-adoption is the moment the host should stop showing
+      // "Disconnected", not minutes later when traffic resumes.
+      io.to(rec.room.code).emit('connection:status', {
+        participantId: rec.participantId,
+        connected: true,
+      });
 
       const serialized = store.serializeRoom(rec.room);
       const result = {

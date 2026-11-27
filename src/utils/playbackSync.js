@@ -102,6 +102,10 @@ export function resolvePlaybackStatus({
   }
   if (effective === 'buffering') return 'buffering';
   if (effective === 'paused' || effective === 'ended') return 'paused';
+  // F1: the local player failed to load/play (e.g. embedding-disabled).
+  // Never fall through to server truth here — the server still says
+  // "playing", which would show "In sync" while the video is dead.
+  if (effective === 'error') return 'error';
 
   // No live local state yet (idle / ready / unknown): server truth.
   if (participantsBuffering) return 'buffering';

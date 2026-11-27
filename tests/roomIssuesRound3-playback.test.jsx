@@ -18,6 +18,7 @@ import {
   shouldReportRealDuration,
   resolveNowPlayingDurationSec,
   resolvePlaybackStatus,
+  shouldReapplyPlayback,
 } from '../src/utils/playbackSync.js';
 import { YouTubePlayer } from '../src/players/YouTubePlayer.js';
 import { RoomContext } from '../src/context/RoomContext.jsx';
@@ -173,6 +174,51 @@ describe('resolvePlaybackStatus (R4)', () => {
 
   it('waits with no room state', () => {
     expect(resolvePlaybackStatus({ ...readyRoom, hasRoomState: false })).toBe('waiting');
+  });
+
+  it('F1: shows error when the local player failed, even though the server says playing', () => {
+    // The live re-test: after an embedding-disabled error the server still
+    // said "playing", so the pill must not claim "In sync" while the video
+    // is dead on YouTube's error screen.
+    expect(resolvePlaybackStatus({ ...readyRoom, playerState: 'error' })).toBe('error');
+  });
+
+  it('F1: shows error for an errored player even with no partner', () => {
+    expect(
+      resolvePlaybackStatus({ ...readyRoom, playerState: 'error', hasPartner: false })
+    ).toBe('error');
+  });
+});
+
+describe('shouldReapplyPlayback after an error (F1)', () => {
+  const base = {
+    signature: 'trk-1:1:playing:0:1000:',
+    lastSignature: 'trk-1:1:playing:0:1000:',
+    trackKey: 'trk-1',
+    lastTrackKey: 'trk-1',
+    playbackState: 'playing',
+  };
+
+  it('re-applies the same playing command when the player errored (not "already trying")', () => {
+    // Before the fix the player stayed 'buffering' after an error, which is
+    // in the leave-alone list — so the effect never retried the failed load.
+    expect(shouldReapplyPlayback({ ...base, livePlayerState: 'error' })).toBe(true);
+  });
+
+  it('still leaves a buffering player alone (the pre-existing R1 behaviour)', () => {
+    expect(shouldReapplyPlayback({ ...base, livePlayerState: 'buffering' })).toBe(false);
+  });
+
+  it('re-applies a paused-room command when the player errored', () => {
+    expect(
+      shouldReapplyPlayback({
+        ...base,
+        playbackState: 'paused',
+        signature: 'trk-1:1:paused:0:1000:',
+        lastSignature: 'trk-1:1:paused:0:1000:',
+        livePlayerState: 'error',
+      })
+    ).toBe(true);
   });
 });
 
@@ -340,9 +386,14 @@ describe('YouTubePlayer (R1 first Play, R5 stale duration)', () => {
     expect(fakePlayer.loadVideoById).toHaveBeenCalledTimes(1);
 
     // The load failed — the in-flight marker must clear so a retry works.
+    // F1: the retry now also recreates the dead player instance (once per
+    // video), so the fresh instance's onReady must fire before the load.
     capturedEvents.onError({ data: 5 });
     fakePlayer.loadVideoById.mockClear();
-    await player.play();
+    const playPromise = player.play();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    capturedEvents.onReady();
+    await playPromise;
     expect(fakePlayer.loadVideoById).toHaveBeenCalledTimes(1);
     container.remove();
   });
@@ -374,6 +425,137 @@ describe('YouTubePlayer (R1 first Play, R5 stale duration)', () => {
     // Once the new video is actually loaded, the real duration is reported.
     videoUrl = 'https://www.youtube.com/watch?v=a5uQMwRMHcs';
     expect(await player.getDuration()).toBe(339000);
+    container.remove();
+  });
+
+  // ---------------------------------------------------------- F1: failure recovery
+  // Live re-test (room C896DH, 2026-11-28): after one embedding-disabled
+  // error, EVERY later load failed — including Midnight City, which had
+  // played fine minutes earlier — and the player never recovered for the
+  // session. The player state also stayed 'buffering' after the error, so
+  // the dedup treated it as "already trying" and never retried.
+  it('F1: onError(150) sets state error, reports it, and clears the in-flight marker', async () => {
+    const onStateChange = vi.fn();
+    const onError = vi.fn();
+    const player = new YouTubePlayer({ onStateChange, onError });
+    const container = makeContainer();
+    await initPlayer(player, container);
+
+    await player.loadTrack(MIDNIGHT_CITY, 0, false);
+    await player.play();
+    expect(fakePlayer.loadVideoById).toHaveBeenCalledTimes(1);
+
+    capturedEvents.onError({ data: 150 });
+    expect(await player.getState()).toBe('error');
+    expect(onStateChange).toHaveBeenCalledWith('error');
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ code: 150, isEmbedBlocked: true })
+    );
+    // The marker must clear so a retry can re-issue the load.
+    fakePlayer.loadVideoById.mockClear();
+    const playPromise = player.play();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    capturedEvents.onReady();
+    await playPromise;
+    expect(fakePlayer.loadVideoById).toHaveBeenCalledTimes(1);
+    container.remove();
+  });
+
+  it('F1: play() after an error recreates the player instance (once per video)', async () => {
+    const player = new YouTubePlayer({ onError: vi.fn() });
+    const container = makeContainer();
+    await initPlayer(player, container);
+    expect(window.YT.Player).toHaveBeenCalledTimes(1);
+
+    await player.loadTrack(MIDNIGHT_CITY, 0, false);
+    await player.play();
+
+    capturedEvents.onError({ data: 150 });
+    const playPromise = player.play();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // A fresh YT.Player is constructed for the recovery.
+    expect(window.YT.Player).toHaveBeenCalledTimes(2);
+    expect(fakePlayer.destroy).toHaveBeenCalledTimes(1);
+    capturedEvents.onReady();
+    await playPromise;
+    // The load is re-issued on the fresh instance.
+    expect(fakePlayer.loadVideoById).toHaveBeenCalledWith({
+      videoId: 'dX3k_QDnzHE',
+      startSeconds: 0,
+    });
+    container.remove();
+  });
+
+  it('F1: a second error for the same video does NOT recreate the player again', async () => {
+    const player = new YouTubePlayer({ onError: vi.fn() });
+    const container = makeContainer();
+    await initPlayer(player, container);
+
+    await player.loadTrack(MIDNIGHT_CITY, 0, false);
+    await player.play();
+
+    // First error → one recovery.
+    capturedEvents.onError({ data: 150 });
+    const firstRetry = player.play();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    capturedEvents.onReady();
+    await firstRetry;
+    expect(window.YT.Player).toHaveBeenCalledTimes(2);
+
+    // The fresh instance fails the same video again — no second recovery,
+    // and no reload loop: the error banner (with "Play next song") is the
+    // way out, not another loadVideoById.
+    fakePlayer.destroy.mockClear();
+    fakePlayer.loadVideoById.mockClear();
+    fakePlayer.playVideo.mockClear();
+    capturedEvents.onError({ data: 150 });
+    await player.play();
+    expect(window.YT.Player).toHaveBeenCalledTimes(2);
+    expect(fakePlayer.destroy).not.toHaveBeenCalled();
+    expect(fakePlayer.loadVideoById).not.toHaveBeenCalled();
+    expect(fakePlayer.playVideo).toHaveBeenCalled();
+    container.remove();
+  });
+
+  it('F1: a track change after an error loads the new video (on a fresh instance if needed)', async () => {
+    const player = new YouTubePlayer({ onError: vi.fn() });
+    const container = makeContainer();
+    await initPlayer(player, container);
+
+    await player.loadTrack(MIDNIGHT_CITY, 0, true);
+    capturedEvents.onError({ data: 150 });
+    expect(await player.getState()).toBe('error');
+
+    // Next to Instant Crush: the new track must load — the dead instance
+    // is recovered first, then loadVideoById is issued for the new video.
+    fakePlayer.loadVideoById.mockClear();
+    const loadPromise = player.loadTrack(INSTANT_CRUSH, 0, true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    capturedEvents.onReady();
+    await loadPromise;
+    expect(fakePlayer.loadVideoById).toHaveBeenCalledWith({
+      videoId: 'a5uQMwRMHcs',
+      startSeconds: 0,
+    });
+    container.remove();
+  });
+
+  it('F1: stray state changes after a failure do not overwrite the error state', async () => {
+    const onStateChange = vi.fn();
+    const player = new YouTubePlayer({ onStateChange });
+    const container = makeContainer();
+    await initPlayer(player, container);
+
+    await player.loadTrack(MIDNIGHT_CITY, 0, false);
+    capturedEvents.onError({ data: 101 });
+    expect(await player.getState()).toBe('error');
+    // The dead load fires a stray UNSTARTED/BUFFERING afterwards — the
+    // state must stay 'error' so the dedup and the pill see the failure.
+    capturedEvents.onStateChange({ data: -1 }); // UNSTARTED
+    capturedEvents.onStateChange({ data: 3 }); // BUFFERING
+    expect(await player.getState()).toBe('error');
+    expect(onStateChange).not.toHaveBeenCalledWith('unstarted');
+    expect(onStateChange).not.toHaveBeenCalledWith('buffering');
     container.remove();
   });
 });
@@ -506,6 +688,66 @@ describe('RoomView duration and Play button (R4/R5)', () => {
     ctx.roomState.playback = { ...ctx.roomState.playback, playbackState: 'playing' };
     const { container, root } = renderCtx(ctx);
     expect(container.querySelector('button[aria-label="Play"]')).not.toBeNull();
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it('F1: the sync pill shows "Playback error" when the local player errored', () => {
+    const ctx = makeCtx({ syncStatus: 'error', playerState: 'error' });
+    ctx.roomState.playback = { ...ctx.roomState.playback, playbackState: 'playing' };
+    const { container, root } = renderCtx(ctx);
+    expect(container.textContent).toContain('Playback error');
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it('F1: the Play button shows Play (not Pause) when the local player errored', () => {
+    const ctx = makeCtx({ playerState: 'error' });
+    ctx.roomState.playback = { ...ctx.roomState.playback, playbackState: 'playing' };
+    const { container, root } = renderCtx(ctx);
+    expect(container.querySelector('button[aria-label="Play"]')).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Pause"]')).toBeNull();
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it('F1: an embed-blocked error offers "Play next song" to a user who can control playback', async () => {
+    const ctx = makeCtx({
+      playerError: {
+        code: 150,
+        message: 'The video owner disabled embedding for this track.',
+        isEmbedBlocked: true,
+      },
+    });
+    const { container, root } = renderCtx(ctx);
+    const nextButton = Array.from(container.querySelectorAll('button')).find(
+      (b) => b.textContent === 'Play next song'
+    );
+    expect(nextButton).toBeTruthy();
+    act(() => {
+      nextButton.click();
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(ctx.sendCommand).toHaveBeenCalledWith('player:next', {});
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it('F1: no "Play next song" button for a guest who cannot control playback', () => {
+    const ctx = makeCtx({
+      playerError: {
+        code: 150,
+        message: 'The video owner disabled embedding for this track.',
+        isEmbedBlocked: true,
+      },
+    });
+    ctx.session = { ...ctx.session, role: 'guest', participantId: 'guest-1' };
+    ctx.roomState.settings.allowGuestControl = false;
+    const { container, root } = renderCtx(ctx);
+    const nextButton = Array.from(container.querySelectorAll('button')).find(
+      (b) => b.textContent === 'Play next song'
+    );
+    expect(nextButton).toBeUndefined();
     act(() => root.unmount());
     container.remove();
   });

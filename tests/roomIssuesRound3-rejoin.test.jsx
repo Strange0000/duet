@@ -114,6 +114,7 @@ function joinResult(state) {
 
 function Probe() {
   const ctx = useRoom();
+  const [cmdResult, setCmdResult] = React.useState('');
   return (
     <div>
       <span data-testid="partner-connected">{String(ctx.partnerConnected)}</span>
@@ -121,6 +122,9 @@ function Probe() {
       <span data-testid="expected">{ctx.syncMetrics.expectedPositionMs}</span>
       <span data-testid="theme">{ctx.roomState?.settings?.theme || ''}</span>
       <span data-testid="audio">{String(ctx.audioUnlocked)}</span>
+      <span data-testid="room-error">{ctx.roomError || ''}</span>
+      <span data-testid="cmd-result">{cmdResult}</span>
+      <div data-testid="player-container" />
       <button
         data-testid="join"
         onClick={() =>
@@ -133,6 +137,31 @@ function Probe() {
         }
       >
         join
+      </button>
+      <button
+        data-testid="send-chat"
+        onClick={async () => {
+          const res = await ctx.sendCommand('chat:send', { text: 'hi' });
+          setCmdResult(res?.ok ? 'ok' : res?.code || 'fail');
+        }}
+      >
+        send chat
+      </button>
+      <button
+        data-testid="init-youtube"
+        onClick={() =>
+          ctx.initPlayerForSource('youtube', document.querySelector('[data-testid="player-container"]'))
+        }
+      >
+        init youtube
+      </button>
+      <button
+        data-testid="init-audio"
+        onClick={() =>
+          ctx.initPlayerForSource('audio', document.querySelector('[data-testid="player-container"]'))
+        }
+      >
+        init audio
       </button>
     </div>
   );
@@ -364,5 +393,324 @@ describe('R3: RoomView presence display follows the derived presence', () => {
       await sleep(50);
     });
     expect(container.textContent).toContain('Disconnected — waiting to reconnect');
+  });
+});
+
+describe('F2: sendCommand survives the refresh / reconnect adoption race', () => {
+  function mockRoomCalls(state) {
+    emitAck.mockImplementation((event) => {
+      if (event === 'room:join') return Promise.resolve(joinResult(state));
+      if (event === 'room:reconnect') return Promise.resolve(joinResult(state));
+      if (event === 'sync:request') return Promise.resolve({ ok: true, state });
+      if (event === 'sync:ping') {
+        const now = Date.now();
+        return Promise.resolve({ ok: true, serverReceivedAtMs: now, serverSentAtMs: now });
+      }
+      return Promise.resolve({ ok: true });
+    });
+  }
+
+  async function joinAsGuest(container) {
+    await act(async () => {
+      container.querySelector('[data-testid="join"]').click();
+      await sleep(700);
+    });
+  }
+
+  it('retries once on a membership error and succeeds — the message is not lost', async () => {
+    const state = makeRoomState();
+    mockRoomCalls(state);
+    const { container, text } = mountProbe();
+    await joinAsGuest(container);
+
+    // The first chat:send lands before the server adopts the socket (the
+    // refresh race); the retry must succeed and the error must clear.
+    let chatAttempts = 0;
+    emitAck.mockImplementation((event) => {
+      if (event === 'chat:send') {
+        chatAttempts += 1;
+        if (chatAttempts === 1) {
+          return Promise.resolve({ ok: false, code: 'NOT_IN_ROOM', error: 'Not joined to a room' });
+        }
+        return Promise.resolve({ ok: true });
+      }
+      if (event === 'sync:ping') {
+        const now = Date.now();
+        return Promise.resolve({ ok: true, serverReceivedAtMs: now, serverSentAtMs: now });
+      }
+      return Promise.resolve({ ok: true });
+    });
+    await act(async () => {
+      container.querySelector('[data-testid="send-chat"]').click();
+      await sleep(1600);
+    });
+    expect(chatAttempts).toBe(2);
+    expect(text('cmd-result')).toBe('ok');
+    expect(text('room-error')).toBe('');
+  });
+
+  it('a genuine permission error is NOT retried and keeps its own message', async () => {
+    const state = makeRoomState();
+    mockRoomCalls(state);
+    const { container, text } = mountProbe();
+    await joinAsGuest(container);
+
+    let attempts = 0;
+    emitAck.mockImplementation((event) => {
+      if (event === 'chat:send') {
+        attempts += 1;
+        return Promise.resolve({
+          ok: false,
+          code: 'UNAUTHORIZED',
+          error: 'Only the host can control playback',
+        });
+      }
+      if (event === 'sync:ping') {
+        const now = Date.now();
+        return Promise.resolve({ ok: true, serverReceivedAtMs: now, serverSentAtMs: now });
+      }
+      return Promise.resolve({ ok: true });
+    });
+    await act(async () => {
+      container.querySelector('[data-testid="send-chat"]').click();
+      await sleep(1600);
+    });
+    expect(attempts).toBe(1);
+    expect(text('cmd-result')).toBe('UNAUTHORIZED');
+    expect(text('room-error')).toBe('Only the host can control playback');
+  });
+
+  it('waits for re-adoption after a socket drop instead of failing the command', async () => {
+    const state = makeRoomState();
+    mockRoomCalls(state);
+    const { container, text } = mountProbe();
+    await joinAsGuest(container);
+
+    // The socket drops mid-room: the socket is no longer adopted.
+    act(() => {
+      fire('disconnect');
+    });
+    // A chat sent now must WAIT for the re-adoption — nothing emitted yet.
+    act(() => {
+      container.querySelector('[data-testid="send-chat"]').click();
+    });
+    await act(async () => {
+      await sleep(400);
+    });
+    expect(emitAck.mock.calls.filter((c) => c[0] === 'chat:send')).toHaveLength(0);
+    expect(text('cmd-result')).toBe('');
+    // The socket reconnects; onConnect re-adopts via room:reconnect.
+    act(() => {
+      fire('connect');
+    });
+    await act(async () => {
+      await sleep(700);
+    });
+    expect(emitAck.mock.calls.filter((c) => c[0] === 'chat:send')).toHaveLength(1);
+    expect(text('cmd-result')).toBe('ok');
+  });
+});
+
+describe('F2: a failed chat send keeps the typed text', () => {
+  function makeCtx(overrides = {}) {
+    const rs = makeRoomState();
+    return {
+      roomState: rs,
+      session: { roomCode: 'UA4DVX', participantId: 'guest-1', role: 'guest', sessionToken: 'tok-guest' },
+      myParticipant: rs.participants[1],
+      partnerParticipant: rs.participants[0],
+      partnerConnected: true,
+      currentTrack: INITIAL_TRACKS[0],
+      connectionStatus: 'connected',
+      pendingApproval: false,
+      roomError: null,
+      playerError: null,
+      audioUnlocked: true,
+      syncMetrics: {
+        rttMs: 100,
+        clockOffsetMs: 0,
+        driftMs: 50,
+        reportedPositionMs: 55000,
+        expectedPositionMs: 55000,
+        correctionCount: 0,
+        reconnectCount: 0,
+        lastSyncedAtMs: null,
+      },
+      syncStatus: 'waiting',
+      volume: 0.85,
+      muted: false,
+      setVolume: vi.fn(),
+      toggleMute: vi.fn(),
+      getCurrentPositionMs: vi.fn().mockResolvedValue(55000),
+      clearRoomError: vi.fn(),
+      reactions: [],
+      unreadChatCount: 0,
+      setUnreadChatCount: vi.fn(),
+      partnerTyping: false,
+      playerContainerRef: { current: null },
+      initPlayerForSource: vi.fn(),
+      createRoom: vi.fn(),
+      joinRoom: vi.fn(),
+      leaveRoom: vi.fn(),
+      unlockAudio: vi.fn(),
+      runClockSync: vi.fn(),
+      sendCommand: vi.fn().mockResolvedValue({
+        ok: false,
+        code: 'NOT_IN_ROOM',
+        error: 'Not joined to a room',
+      }),
+      setPlayerError: vi.fn(),
+      setRoomError: vi.fn(),
+      ...overrides,
+    };
+  }
+
+  function renderRoomView(ctx) {
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    mounted.push({ container, root });
+    act(() => {
+      root.render(
+        <RoomContext.Provider value={ctx}>
+          <RoomView isDemo={false} onLeave={() => {}} />
+        </RoomContext.Provider>
+      );
+    });
+    return container;
+  }
+
+  it('keeps the typed message when the send fails, so the user can retry', async () => {
+    const ctx = makeCtx();
+    const container = renderRoomView(ctx);
+    await act(async () => {
+      await sleep(50);
+    });
+    // Open the Chat tab — the form only renders there.
+    const chatTab = Array.from(container.querySelectorAll('button')).find(
+      (b) => b.textContent.trim() === 'Chat'
+    );
+    expect(chatTab).toBeTruthy();
+    act(() => {
+      chatTab.click();
+    });
+    const input = container.querySelector('input[aria-label="Chat message"]');
+    expect(input).not.toBeNull();
+    // Type into the controlled input (native setter + input event).
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    act(() => {
+      setter.call(input, 'hello after refresh');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(input.value).toBe('hello after refresh');
+    // Submit; the send fails (membership error) — the text must stay.
+    await act(async () => {
+      input.closest('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      await sleep(50);
+    });
+    expect(ctx.sendCommand).toHaveBeenCalledWith('chat:send', { text: 'hello after refresh' });
+    expect(input.value).toBe('hello after refresh');
+  });
+
+  it('clears the text when the send succeeds', async () => {
+    const ctx = makeCtx({ sendCommand: vi.fn().mockResolvedValue({ ok: true }) });
+    const container = renderRoomView(ctx);
+    await act(async () => {
+      await sleep(50);
+    });
+    const chatTab = Array.from(container.querySelectorAll('button')).find(
+      (b) => b.textContent.trim() === 'Chat'
+    );
+    act(() => {
+      chatTab.click();
+    });
+    const input = container.querySelector('input[aria-label="Chat message"]');
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    act(() => {
+      setter.call(input, 'hello');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => {
+      input.closest('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      await sleep(50);
+    });
+    expect(input.value).toBe('');
+  });
+});
+
+describe('Small fix: Audio Only re-emits player:ready on a seamless switch', () => {
+  let capturedEvents;
+
+  beforeEach(() => {
+    capturedEvents = null;
+    const fakePlayer = {
+      loadVideoById: vi.fn(),
+      cueVideoById: vi.fn(),
+      playVideo: vi.fn(),
+      pauseVideo: vi.fn(),
+      seekTo: vi.fn(),
+      getCurrentTime: vi.fn(() => 0),
+      getDuration: vi.fn(() => 243),
+      getVideoUrl: vi.fn(() => ''),
+      getVolume: vi.fn(() => 85),
+      setVolume: vi.fn(),
+      mute: vi.fn(),
+      unMute: vi.fn(),
+      destroy: vi.fn(),
+    };
+    window.YT = {
+      PlayerState: { UNSTARTED: -1, ENDED: 0, PLAYING: 1, PAUSED: 2, BUFFERING: 3, CUED: 5 },
+      Player: vi.fn(function (el, config) {
+        capturedEvents = config.events;
+        return fakePlayer;
+      }),
+    };
+  });
+
+  afterEach(() => {
+    delete window.YT;
+  });
+
+  it('switching youtube -> audio on the same player re-emits player:ready', async () => {
+    const state = makeRoomState();
+    emitAck.mockImplementation((event) => {
+      if (event === 'room:join') return Promise.resolve(joinResult(state));
+      if (event === 'sync:request') return Promise.resolve({ ok: true, state });
+      if (event === 'sync:ping') {
+        const now = Date.now();
+        return Promise.resolve({ ok: true, serverReceivedAtMs: now, serverSentAtMs: now });
+      }
+      return Promise.resolve({ ok: true });
+    });
+    const { container } = mountProbe();
+    await act(async () => {
+      container.querySelector('[data-testid="join"]').click();
+      await sleep(700);
+    });
+
+    // Initialise the YouTube player (fires onReady -> player:ready #1).
+    await act(async () => {
+      container.querySelector('[data-testid="init-youtube"]').click();
+      await sleep(50);
+    });
+    act(() => {
+      capturedEvents.onReady();
+    });
+    await act(async () => {
+      await sleep(50);
+    });
+    const readyCalls = () => emitAck.mock.calls.filter((c) => c[0] === 'player:ready');
+    expect(readyCalls()).toHaveLength(1);
+
+    // Switch to Audio Only: the same instance is kept (seamless switch),
+    // so no onReady fires — but player:ready must still be re-emitted,
+    // otherwise the server keeps ready=false and both tabs show
+    // "Waiting for partner" while playing.
+    await act(async () => {
+      container.querySelector('[data-testid="init-audio"]').click();
+      await sleep(50);
+    });
+    expect(readyCalls()).toHaveLength(2);
+    expect(readyCalls()[1][1]).toEqual({ ready: true });
   });
 });

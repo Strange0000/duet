@@ -96,6 +96,17 @@ export class YouTubePlayer extends BasePlayer {
     // a first Play never finished loading. A play() that arrives while the
     // load is already in flight must NOT reload; it just calls playVideo().
     this.loadIssuedForVideoId = null;
+    // F1 (PR #5 follow-up): the videoId whose load last failed, and whether
+    // the player instance itself is suspect. The live re-test showed that
+    // once one load errored (embedding-disabled), EVERY later load failed —
+    // including a video that had played fine minutes earlier — and the
+    // watchdog's single play() retry (which re-issues loadVideoById) failed
+    // too. Whether the instance is dead or YouTube refused transiently, the
+    // only in-code recovery is a fresh player instance (recoverIfFailed,
+    // bounded to once per video).
+    this.playerFailed = false;
+    this.failedVideoId = null;
+    this.recoveredVideoId = null;
     this.volume = 0.85;
     this.muted = false;
   }
@@ -164,10 +175,27 @@ export class YouTubePlayer extends BasePlayer {
           onStateChange: (event) => {
             const YTState = window.YT?.PlayerState;
             if (!YTState) return;
+            // F1: while a load has failed, stray state changes (UNSTARTED /
+            // CUED / BUFFERING from the dead load) must not overwrite the
+            // 'error' state — otherwise the dedup treats the player as
+            // "already trying" and never retries, and the pill lies. Only
+            // PLAYING (recovered) and ENDED may pass through.
+            if (
+              this.playerFailed &&
+              event.data !== YTState.PLAYING &&
+              event.data !== YTState.ENDED
+            ) {
+              return;
+            }
             if (event.data === YTState.PLAYING) {
               this.state = 'playing';
               this.hasPlayedVideoId = this.currentVideoId;
               this.loadIssuedForVideoId = null;
+              // F1: a successful play clears the failure — a later error
+              // for this video gets a fresh recovery budget.
+              this.playerFailed = false;
+              this.failedVideoId = null;
+              this.recoveredVideoId = null;
               this.callbacks.onStateChange?.('playing');
             } else if (event.data === YTState.PAUSED) {
               this.state = 'paused';
@@ -195,14 +223,65 @@ export class YouTubePlayer extends BasePlayer {
             const code = event.data;
             const message = YT_ERROR_MESSAGES[code] || `YouTube player error (${code})`;
             const isEmbedBlocked = code === 101 || code === 150 || code === 100;
-            // R1 (follow-up): a failed load must not block a retry — clear
+            // F1: a failed load must not block a retry — clear
             // the in-flight marker so the next play() can force-load again.
             this.loadIssuedForVideoId = null;
+            // F1: record the failure as STATE, not just a callback. Before
+            // this, `this.state` stayed 'buffering' after an error, so the
+            // dedup (shouldReapplyPlayback) treated the player as "already
+            // trying to start" and the effect never retried — the player sat
+            // on YouTube's error screen forever. 'error' is not in the
+            // dedup's leave-alone list, so a re-apply is now allowed, and
+            // the status pill shows the failure honestly instead of
+            // "Buffering". The instance itself is marked suspect: the live
+            // re-test showed every later load failing after one error, so
+            // the next load/play recreates the player (once per video).
+            this.state = 'error';
+            const isLoadFailure = code === 2 || code === 5 || code === 100 || code === 101 || code === 150;
+            if (isLoadFailure && this.currentVideoId) {
+              this.playerFailed = true;
+              this.failedVideoId = this.currentVideoId;
+            }
+            this.callbacks.onStateChange?.('error');
             this.callbacks.onError?.({ code, message, isEmbedBlocked });
           },
         },
       });
     });
+  }
+
+  /**
+   * F1: recreate the player instance after a load failure, bounded to once
+   * per video. A failed YT.Player can refuse every later load (the live
+   * re-test: even a video that had played fine minutes earlier showed
+   * "Video unavailable" after one error), so retrying loadVideoById on the
+   * same instance is not a recovery. A fresh instance is. The bound keeps a
+   * genuinely blocked video from thrashing the iframe on every room:state
+   * re-broadcast (~1/s): after one recovery for a video, further failures
+   * for that video surface the error banner (with "Play next song") instead
+   * of re-creating the player again. Returns true when a recovery happened.
+   * Safe to call when nothing failed (returns false immediately).
+   */
+  async recoverIfFailed() {
+    if (!this.playerFailed || !this.containerEl) return false;
+    const videoId = this.currentVideoId;
+    if (!videoId || this.recoveredVideoId === videoId) return false;
+    this.recoveredVideoId = videoId;
+    this.playerFailed = false;
+    this.failedVideoId = null;
+    try {
+      this.player?.destroy?.();
+    } catch {
+      // Ignore cleanup error
+    }
+    this.player = null;
+    this.isReady = false;
+    this.hasPlayedVideoId = null;
+    this.loadIssuedForVideoId = null;
+    this.pendingVideo = null;
+    this.state = 'idle';
+    await this.initialize(this.containerEl);
+    return true;
   }
 
   async loadTrack(track, startPositionMs = 0, shouldPlay = false) {
@@ -215,6 +294,10 @@ export class YouTubePlayer extends BasePlayer {
       });
       return;
     }
+
+    // F1: a previous load may have left the player instance dead — recover
+    // it (once per video) before issuing a new load.
+    await this.recoverIfFailed();
 
     const startSec = Math.max(0, startPositionMs / 1000);
     if (this.currentVideoId === videoId) {
@@ -269,8 +352,19 @@ export class YouTubePlayer extends BasePlayer {
     // from scratch each time — that was the actual stall. While the load
     // is in flight, just call playVideo() (a no-op while buffering) and
     // let the load finish.
+    // F1: recover a dead instance first (once per video), and never re-issue
+    // a load for a video that already failed on a FRESH instance — the error
+    // banner (with "Play next song") is the way out, not a reload loop.
+    await this.recoverIfFailed();
     if (this.currentVideoId && this.hasPlayedVideoId !== this.currentVideoId) {
       if (this.loadIssuedForVideoId === this.currentVideoId) {
+        this.player.playVideo();
+        return;
+      }
+      if (
+        this.failedVideoId === this.currentVideoId &&
+        this.recoveredVideoId === this.currentVideoId
+      ) {
         this.player.playVideo();
         return;
       }
@@ -390,5 +484,8 @@ export class YouTubePlayer extends BasePlayer {
     this.hasPlayedVideoId = null;
     this.loadIssuedForVideoId = null;
     this.pendingVideo = null;
+    this.playerFailed = false;
+    this.failedVideoId = null;
+    this.recoveredVideoId = null;
   }
 }

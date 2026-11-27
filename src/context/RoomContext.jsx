@@ -22,6 +22,18 @@ const SESSION_STORAGE_KEY = 'duet_active_session';
 const VOLUME_STORAGE_KEY = 'duet_volume';
 const DEFAULT_VOLUME = 0.85;
 
+// F2: server replies that mean "this socket is not adopted into the room
+// (yet)" — transient during a refresh / reconnect, never a statement about
+// the participant. Commands that hit one are retried once, and the user
+// never sees the raw lookup text. Note the UNAUTHORIZED case: the server
+// uses the same code for genuine permission failures ("Only the host can
+// control playback"), so only the exact 'Participant not found' message
+// counts as a membership error.
+const isMembershipError = (res) =>
+  res?.code === 'NOT_IN_ROOM' ||
+  res?.code === 'PARTICIPANT_NOT_FOUND' ||
+  (res?.code === 'UNAUTHORIZED' && res?.error === 'Participant not found');
+
 // R3: how long the partner still counts as connected after their last
 // observed traffic (player report, chat/reaction/typing, host command),
 // even when the server's per-participant `connected` flag says otherwise.
@@ -127,6 +139,14 @@ export function RoomProvider({ children }) {
   const loadedTrackKeyRef = useRef(null);
   const roomStateRef = useRef(null);
   const sessionRef = useRef(null);
+  // F2: whether THIS socket has been adopted into the room by the server
+  // (room:join / room:reconnect / room:create ack, or a room:joined event).
+  // After a refresh — or a mid-room socket drop + auto-reconnect — the
+  // socket is connected but not yet adopted, and any command sent in that
+  // window fails NOT_IN_ROOM / PARTICIPANT_NOT_FOUND. sendCommand waits for
+  // this flag (bounded) before emitting, so a chat typed right after a
+  // refresh is not lost to the adoption race.
+  const adoptedRef = useRef(false);
   const audioUnlockedRef = useRef(false);
   const scheduledPlayTimerRef = useRef(null);
   // N-02: real player duration (ms) cached from player.getDuration(); the
@@ -510,6 +530,14 @@ export function RoomProvider({ children }) {
         containerEl &&
         playerRef.current.containerEl === containerEl
       ) {
+        // Small fix (Audio Only status): the same initialized player is
+        // kept, so no onReady fires — but updateParticipant set ready=false
+        // when the source changed, and nothing set it back. The pill then
+        // read "Waiting for partner" on both tabs while playing. The player
+        // IS ready (same instance), so re-emit it here.
+        if (sessionRef.current) {
+          emitAck('player:ready', { ready: true }).catch(() => {});
+        }
         return;
       }
 
@@ -569,6 +597,21 @@ export function RoomProvider({ children }) {
         },
         onError: (err) => {
           setPlayerError(err);
+          // F1: a failed load must not stay "already applied" in the dedup:
+          // the next effect run has to re-issue the load (on a recovered
+          // player), not conclude the command is done. Reset the applied
+          // signature; the track key stays (same track), so the effect
+          // re-applies via play(), which recovers the player if needed.
+          lastAppliedPlaybackRef.current = null;
+          // F1: an embedding-disabled / removed video will never play — the
+          // specific error is already shown, so the stall watchdog must not
+          // overwrite it with a generic "Playback didn't start" after its
+          // retry. (Non-embed errors keep the watchdog's one retry.)
+          if (err?.isEmbedBlocked && playWatchdogTimerRef.current) {
+            clearTimeout(playWatchdogTimerRef.current);
+            playWatchdogTimerRef.current = null;
+            playWatchdogAttemptRef.current = 0;
+          }
         },
       };
 
@@ -618,6 +661,8 @@ export function RoomProvider({ children }) {
       };
       setSession(nextSession);
       saveSession(nextSession);
+      // F2: this socket is adopted from here on — commands may be sent.
+      adoptedRef.current = true;
       setRoomState(res.state);
       seedPositionFromPlayback(res.state?.playback);
       setAudioUnlocked(true);
@@ -655,6 +700,8 @@ export function RoomProvider({ children }) {
               };
               setSession(nextSession);
               saveSession(nextSession);
+              // F2: the re-adoption succeeded — this socket may send commands.
+              adoptedRef.current = true;
               setRoomState(res.state);
               // R6: adopt the room's current position/theme at once, and
               // re-fetch the authoritative snapshot in case a broadcast
@@ -678,6 +725,10 @@ export function RoomProvider({ children }) {
 
     const onDisconnect = () => {
       setConnectionStatus('reconnecting');
+      // F2: this socket is no longer adopted — the server attached the
+      // participant to the OLD socket id. Commands must wait for the
+      // re-adoption (room:reconnect) instead of failing NOT_IN_ROOM.
+      adoptedRef.current = false;
       setSyncMetrics((prev) => ({ ...prev, reconnectCount: prev.reconnectCount + 1 }));
     };
 
@@ -786,6 +837,7 @@ export function RoomProvider({ children }) {
     const onRoomClosed = ({ reason }) => {
       setRoomError(reason || 'Room closed');
       setPendingApproval(null);
+      adoptedRef.current = false;
       setRoomState(null);
       setSession(null);
       clearSession();
@@ -802,6 +854,9 @@ export function RoomProvider({ children }) {
       setPendingApproval(null);
       setSession(nextSession);
       saveSession(nextSession);
+      // F2: the server just adopted this socket (join, reconnect, or an
+      // approved join) — commands may be sent from here on.
+      adoptedRef.current = true;
       setRoomState(res.state);
       // R6: adopt the room's current position immediately on (re)join —
       // before any audio-unlock tap. The theme comes from res.state
@@ -1199,6 +1254,8 @@ export function RoomProvider({ children }) {
     };
     setSession(nextSession);
     saveSession(nextSession);
+    // F2: the join ack means the server adopted this socket.
+    adoptedRef.current = true;
     setRoomState(res.state);
     // R6: adopt the room's current position/theme at once, and re-fetch
     // the authoritative snapshot in case a broadcast landed mid-join.
@@ -1225,6 +1282,9 @@ export function RoomProvider({ children }) {
     clearSession();
     setSession(null);
     setRoomState(null);
+    // F2: no room, no adoption — a later command must not assume the old
+    // socket is still adopted.
+    adoptedRef.current = false;
     setAudioUnlocked(false);
     setPlayerError(null);
   }, []);
@@ -1244,20 +1304,65 @@ export function RoomProvider({ children }) {
     }
   }, [applyPlaybackToPlayer, currentTrack, myParticipant?.source]);
 
+  // F2: wait (bounded) for this socket to be adopted into the room before
+  // emitting a command. After a refresh or a mid-room socket drop, the
+  // socket is connected but the server has not yet processed room:reconnect
+  // — a command sent in that window fails NOT_IN_ROOM /
+  // PARTICIPANT_NOT_FOUND and (for chat) the message is lost. No session
+  // means no room (demo / landing), so send as before.
+  const waitForAdoption = useCallback(async (timeoutMs = 5000) => {
+    const deadline = Date.now() + timeoutMs;
+    while (!adoptedRef.current && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return adoptedRef.current;
+  }, []);
+
   const sendCommand = useCallback(async (event, payload = {}) => {
-    const res = await emitAck(event, {
-      ...payload,
-      commandId: generateCommandId(),
-      expectedRoomVersion: roomStateRef.current?.roomVersion,
-    });
+    if (sessionRef.current && !adoptedRef.current) {
+      await waitForAdoption();
+    }
+    // F2: the roomVersion is read fresh per attempt — a retry after a
+    // membership error must not send the stale version from the first
+    // attempt (the store rejects stale versions), and the commandId is
+    // fresh too (the store dedupes by commandId).
+    const attempt = async () => {
+      const res = await emitAck(event, {
+        ...payload,
+        commandId: generateCommandId(),
+        expectedRoomVersion: roomStateRef.current?.roomVersion,
+      }).catch((err) => ({
+        ok: false,
+        code: 'ACK_TIMEOUT',
+        error: err?.message || 'No response from server',
+      }));
+      return res;
+    };
+    let res = await attempt();
+    // F2: a membership error means the command landed before the server
+    // adopted this socket (refresh / reconnect race) — or the adoption is
+    // still in flight. One retry after a short delay covers it; the first
+    // attempt was never processed, so it cannot double-apply.
+    if (!res?.ok && isMembershipError(res)) {
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      res = await attempt();
+    }
     if (!res?.ok) {
-      setRoomError(res?.error || `Command ${event} failed`);
+      // F2: never show the raw lookup error ("Participant not found") — it
+      // is a reconnect race, not a statement about the participant. The
+      // message stays honest but actionable, and it clears as soon as the
+      // next command succeeds (N-17).
+      setRoomError(
+        isMembershipError(res)
+          ? 'Still reconnecting to the room — please try again in a moment.'
+          : res?.error || `Command ${event} failed`,
+      );
     } else {
       // N-17: clear any stale room error on success.
       setRoomError(null);
     }
     return res;
-  }, []);
+  }, [waitForAdoption]);
 
   // Wire OS lock-screen / MediaSession controls & visibility re-sync for background playback
   useEffect(() => {
