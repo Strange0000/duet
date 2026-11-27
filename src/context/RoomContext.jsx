@@ -16,7 +16,7 @@ import { backgroundAudio } from '../utils/backgroundAudio';
 import { ClockSync } from '../utils/clockSync';
 import { computeExpectedPositionMs, evaluateDriftCorrection } from '../utils/playbackSync';
 
-const RoomContext = createContext(null);
+export const RoomContext = createContext(null);
 
 const SESSION_STORAGE_KEY = 'duet_active_session';
 const VOLUME_STORAGE_KEY = 'duet_volume';
