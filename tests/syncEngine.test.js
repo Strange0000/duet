@@ -5,7 +5,9 @@ import {
   computePlaybackSignature,
   evaluateDriftCorrection,
   playerHasStarted,
+  resolvePlaybackStatus,
   shouldReapplyPlayback,
+  shouldReportRealDuration,
 } from '../src/utils/playbackSync.js';
 
 describe('ClockSync & PlaybackSync', () => {
@@ -238,5 +240,46 @@ describe('playerHasStarted (R1 follow-up drift guard)', () => {
     for (const state of ['buffering', 'cued', 'unstarted', 'idle', 'ready', 'ended', null, undefined]) {
       expect(playerHasStarted(state)).toBe(false);
     }
+  });
+});
+
+// Round 4 (room P4G97R re-test): queue durations were corrupted after
+// errors (Instant Crush 05:37 → 05:40, The Less I Know The Better 03:36 →
+// 05:43) because the drift loop reported an errored player's duration,
+// and the pill said "In sync" while the guest was ~25s ahead of the host.
+describe('Round 4: duration reporting + partner drift', () => {
+  const durationBase = {
+    loadedId: 'a5uQMwRMHcs',
+    expectedId: 'a5uQMwRMHcs',
+    realDurationMs: 340000,
+    storedMs: 337000,
+    lastReportedMs: 0,
+  };
+
+  it('shouldReportRealDuration refuses when the player has not started the expected video', () => {
+    // An errored player's getVideoUrl() still returns the failed video's
+    // URL (loadedId matches) while getDuration() returns that video's
+    // YouTube length — reporting it overwrites the queue item's duration
+    // with the wrong value (340s for Instant Crush vs 337s stored).
+    expect(shouldReportRealDuration({ ...durationBase, playerStarted: false })).toBe(false);
+    expect(shouldReportRealDuration({ ...durationBase, playerStarted: true })).toBe(true);
+  });
+
+  it('resolvePlaybackStatus says syncing — not in-sync — when the partner is seconds away', () => {
+    const base = {
+      playerState: 'playing',
+      serverPlaybackState: 'playing',
+      driftMs: 0,
+      hasPartner: true,
+      partnerReady: true,
+      meReady: true,
+    };
+    // My drift vs the anchor is 0, but the partner is 25s away: the tabs
+    // are not in sync with each other.
+    expect(resolvePlaybackStatus({ ...base, partnerDriftMs: 25000 })).toBe('syncing');
+    expect(resolvePlaybackStatus({ ...base, partnerDriftMs: -25000 })).toBe('syncing');
+    expect(resolvePlaybackStatus({ ...base, partnerDriftMs: 200 })).toBe('in-sync');
+    // No partner position to compare against: anchor drift alone decides.
+    expect(resolvePlaybackStatus({ ...base, partnerDriftMs: null })).toBe('in-sync');
   });
 });

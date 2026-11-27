@@ -3,7 +3,7 @@
  */
 export function computeExpectedPositionMs(playback, estimatedServerNowMs) {
   if (!playback) return 0;
-  const durationMs = playback.durationMs > 0 ? playback.durationMs : Infinity;
+  const durationMs = Math.max(0, playback.durationMs || 0);
   const anchorPos = Math.max(0, Math.min(durationMs, playback.anchorPositionMs || 0));
 
   if (playback.playbackState !== 'playing') {
@@ -40,7 +40,17 @@ export function shouldReportRealDuration({
   realDurationMs,
   storedMs = 0,
   lastReportedMs = 0,
+  // Round 4: only report once the player has ACTUALLY STARTED the
+  // expected video. On an errored player, getVideoUrl() still returns
+  // the failed video's URL (so loadedId matches) while getDuration()
+  // returns that video's YouTube length — which differs from the
+  // track's stored length (Instant Crush 337s stored vs 340s on
+  // YouTube, The Less I Know The Better 216s vs 343s) — and the server
+  // overwrote the queue item's duration with the wrong value after
+  // every failure. The caller passes playerHasStarted(playerState).
+  playerStarted = true,
 }) {
+  if (!playerStarted) return false;
   if (!realDurationMs || realDurationMs <= 0) return false;
   if (!loadedId || !expectedId) return false;
   if (loadedId !== expectedId) return false;
@@ -84,33 +94,34 @@ export function resolvePlaybackStatus({
   serverPlaybackState,
   participantsBuffering = false,
   driftMs = 0,
-  partnerDriftMs = 0,
-  partnerPlaybackConfirmed = true,
-  localPlaybackConfirmed = true,
   hasPartner = false,
   partnerReady = false,
   meReady = false,
   hasRoomState = true,
+  // Round 4: my reported position minus the partner's reported position.
+  // The old check only compared MY drift against the server anchor, so
+  // when the host lagged the anchor the guest (following the anchor)
+  // could sit ~25s ahead of the host while both pills said "In sync".
+  // 'in-sync' now also requires the two tabs to be close to each other.
+  // null when there is no partner position to compare against.
+  partnerDriftMs = null,
 }) {
   if (!hasRoomState) return 'waiting';
-
-  const inSync = localPlaybackConfirmed && partnerPlaybackConfirmed &&
-    Math.abs(driftMs) < 350 && Math.abs(partnerDriftMs) < 350 &&
-    Math.abs(driftMs - partnerDriftMs) < 350;
 
   let effective = playerState || null;
   if ((effective === 'buffering' || effective === 'paused') && positionAdvanced) {
     effective = 'playing';
   }
 
+  // Round 4: the tabs are only "in sync" when BOTH are close to the
+  // anchor AND close to each other.
+  const partnerInSync = partnerDriftMs == null || Math.abs(partnerDriftMs) < 1500;
+
   if (effective === 'playing') {
     if (!hasPartner || !partnerReady || !meReady) return 'waiting';
-    return inSync ? 'in-sync' : 'syncing';
+    return Math.abs(driftMs) < 350 && partnerInSync ? 'in-sync' : 'syncing';
   }
   if (effective === 'buffering') return 'buffering';
-  if (effective === 'cued' || effective === 'unstarted') {
-    return serverPlaybackState === 'playing' ? 'buffering' : 'paused';
-  }
   if (effective === 'paused' || effective === 'ended') return 'paused';
   // F1: the local player failed to load/play (e.g. embedding-disabled).
   // Never fall through to server truth here — the server still says
@@ -122,7 +133,7 @@ export function resolvePlaybackStatus({
   if (serverPlaybackState === 'paused') return 'paused';
   if (serverPlaybackState === 'playing') {
     if (!hasPartner || !partnerReady || !meReady) return 'waiting';
-    return inSync ? 'in-sync' : 'syncing';
+    return Math.abs(driftMs) < 350 && partnerInSync ? 'in-sync' : 'syncing';
   }
   return 'waiting';
 }
@@ -175,7 +186,6 @@ export function shouldReapplyPlayback({
   playbackState,
 }) {
   if (!signature || signature !== lastSignature || trackKey !== lastTrackKey) return true;
-  if (livePlayerState === 'error') return false;
   if (playbackState === 'playing') {
     // Already playing, or already trying to start — leave it alone. A
     // paused/ready/idle player is the one case that needs a fresh play().

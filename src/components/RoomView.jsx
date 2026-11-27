@@ -107,6 +107,10 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
     playerState: ctxPlayerState,
     getCurrentPositionMs,
     clearRoomError,
+    // Round 4: full in-app player reset (what a page reload does). May be
+    // undefined with an older context value — the "Reload player" button
+    // only renders when it exists.
+    reloadPlayer: ctxReloadPlayer,
   } = useRoom();
 
   // ——— Demo Mode Fallback State (only used when isDemo === true) ———
@@ -168,6 +172,8 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
   // ——— Shared UI State ———
   const [copied, setCopied] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
+  // Round 4: disables the "Reload player" button while a reload is running.
+  const [reloadingPlayer, setReloadingPlayer] = useState(false);
   const [activeTab, setActiveTab] = useState('queue'); // 'queue' | 'search' | 'chat'
   const [searchQuery, setSearchQuery] = useState('');
   const [dedication, setDedication] = useState('');
@@ -1335,6 +1341,24 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
           <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-xs text-rose-200">
             <span>{playerError?.message || roomError}</span>
             <div className="flex items-center gap-2">
+              {playerError && ctxReloadPlayer && (
+                <button
+                  onClick={async () => {
+                    setReloadingPlayer(true);
+                    try {
+                      const ok = await ctxReloadPlayer();
+                      if (ok) showToast('Player reloaded — resuming playback');
+                      else showToast('Player reload failed — try refreshing the page');
+                    } finally {
+                      setReloadingPlayer(false);
+                    }
+                  }}
+                  disabled={reloadingPlayer}
+                  className="rounded-full bg-white/15 px-3 py-1 font-semibold text-white hover:bg-white/25 disabled:opacity-50 cursor-pointer"
+                >
+                  {reloadingPlayer ? 'Reloading…' : 'Reload player'}
+                </button>
+              )}
               {playerError?.isEmbedBlocked && currentTrack && (
                 <button
                   onClick={async () => {
@@ -1360,7 +1384,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                   Find Embeddable Version
                 </button>
               )}
-              {(playerError?.isEmbedBlocked || playerError?.code === 'PLAY_STALLED') && canControl && (
+              {playerError?.isEmbedBlocked && canControl && (
                 <button
                   onClick={async () => {
                     setPlayerError(null);

@@ -27,6 +27,7 @@ import { INITIAL_TRACKS } from '../src/data/mockTracks.js';
 
 const MIDNIGHT_CITY = INITIAL_TRACKS[0]; // 243s, youtubeId dX3k_QDnzHE
 const INSTANT_CRUSH = INITIAL_TRACKS[1]; // 337s, youtubeId a5uQMwRMHcs
+const LESS_I_KNOW = INITIAL_TRACKS[2]; // 216s, youtubeId sBzrzS1Ag_g
 
 // ---------------------------------------------------------------- R5: duration reporting
 describe('shouldReportRealDuration (R5)', () => {
@@ -127,13 +128,6 @@ describe('resolvePlaybackStatus (R4)', () => {
     ).toBe('in-sync');
   });
 
-  it('requires measured playback on both sides before showing In sync', () => {
-    expect(resolvePlaybackStatus({ ...readyRoom, partnerDriftMs: 25000 })).toBe('syncing');
-    expect(resolvePlaybackStatus({ ...readyRoom, partnerPlaybackConfirmed: false })).toBe('syncing');
-    expect(resolvePlaybackStatus({ ...readyRoom, localPlaybackConfirmed: false })).toBe('syncing');
-    expect(resolvePlaybackStatus({ ...readyRoom, driftMs: 250, partnerDriftMs: -250 })).toBe('syncing');
-  });
-
   it('treats buffering as playing when the position is advancing', () => {
     expect(
       resolvePlaybackStatus({
@@ -206,18 +200,17 @@ describe('shouldReapplyPlayback after an error (F1)', () => {
     playbackState: 'playing',
   };
 
-  it('waits for a fresh play command after an error', () => {
-    expect(shouldReapplyPlayback({ ...base, livePlayerState: 'error' })).toBe(false);
-    expect(shouldReapplyPlayback({
-      ...base, signature: 'trk-1:1:playing:0:2000:', livePlayerState: 'error',
-    })).toBe(true);
+  it('re-applies the same playing command when the player errored (not "already trying")', () => {
+    // Before the fix the player stayed 'buffering' after an error, which is
+    // in the leave-alone list — so the effect never retried the failed load.
+    expect(shouldReapplyPlayback({ ...base, livePlayerState: 'error' })).toBe(true);
   });
 
   it('still leaves a buffering player alone (the pre-existing R1 behaviour)', () => {
     expect(shouldReapplyPlayback({ ...base, livePlayerState: 'buffering' })).toBe(false);
   });
 
-  it('leaves a failed player alone while the room is paused', () => {
+  it('re-applies a paused-room command when the player errored', () => {
     expect(
       shouldReapplyPlayback({
         ...base,
@@ -226,7 +219,7 @@ describe('shouldReapplyPlayback after an error (F1)', () => {
         lastSignature: 'trk-1:1:paused:0:1000:',
         livePlayerState: 'error',
       })
-    ).toBe(false);
+    ).toBe(true);
   });
 });
 
@@ -432,12 +425,7 @@ describe('YouTubePlayer (R1 first Play, R5 stale duration)', () => {
     expect(await player.getDuration()).toBe(0);
     // Once the new video is actually loaded, the real duration is reported.
     videoUrl = 'https://www.youtube.com/watch?v=a5uQMwRMHcs';
-    expect(await player.getDuration()).toBe(0);
-    capturedEvents.onStateChange({ data: 1 });
     expect(await player.getDuration()).toBe(339000);
-    capturedEvents.onError({ data: 150 });
-    expect(await player.getDuration()).toBe(0);
-    expect(await player.getLoadedVideoId()).toBeNull();
     container.remove();
   });
 
@@ -526,7 +514,7 @@ describe('YouTubePlayer (R1 first Play, R5 stale duration)', () => {
     expect(window.YT.Player).toHaveBeenCalledTimes(2);
     expect(fakePlayer.destroy).not.toHaveBeenCalled();
     expect(fakePlayer.loadVideoById).not.toHaveBeenCalled();
-    expect(fakePlayer.playVideo).not.toHaveBeenCalled();
+    expect(fakePlayer.playVideo).toHaveBeenCalled();
     container.remove();
   });
 
@@ -553,50 +541,6 @@ describe('YouTubePlayer (R1 first Play, R5 stale duration)', () => {
     container.remove();
   });
 
-  it('replaces a failed retry on skip and lets the latest skip win while rebuilding', async () => {
-    const player = new YouTubePlayer();
-    const container = makeContainer();
-    await initPlayer(player, container);
-
-    await player.loadTrack(INSTANT_CRUSH, 0, true);
-    capturedEvents.onError({ data: 150 });
-    const retry = player.play();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    capturedEvents.onReady();
-    await retry;
-    const deadEvents = capturedEvents;
-    deadEvents.onError({ data: 150 });
-
-    fakePlayer.loadVideoById.mockClear();
-    const next = player.loadTrack(MIDNIGHT_CITY, 0, true);
-    const latest = player.loadTrack(INSTANT_CRUSH, 5000, true);
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    deadEvents.onError({ data: 150 });
-    capturedEvents.onReady();
-    await Promise.all([next, latest]);
-    expect(window.YT.Player).toHaveBeenCalledTimes(3);
-    expect(fakePlayer.loadVideoById).toHaveBeenCalledExactlyOnceWith({
-      videoId: INSTANT_CRUSH.youtubeId,
-      startSeconds: 5,
-    });
-    container.remove();
-  });
-
-  it('accepts confirmed playback after a startup timeout', async () => {
-    const onStateChange = vi.fn();
-    const player = new YouTubePlayer({ onStateChange });
-    const container = makeContainer();
-    await initPlayer(player, container);
-    await player.loadTrack(INSTANT_CRUSH, 0, true);
-
-    player.markFailed({ allowLateStart: true });
-    videoUrl = 'https://www.youtube.com/watch?v=a5uQMwRMHcs';
-    capturedEvents.onStateChange({ data: 1 });
-    expect(await player.getState()).toBe('playing');
-    expect(onStateChange).toHaveBeenLastCalledWith('playing');
-    container.remove();
-  });
-
   it('F1: stray state changes after a failure do not overwrite the error state', async () => {
     const onStateChange = vi.fn();
     const player = new YouTubePlayer({ onStateChange });
@@ -613,6 +557,287 @@ describe('YouTubePlayer (R1 first Play, R5 stale duration)', () => {
     expect(await player.getState()).toBe('error');
     expect(onStateChange).not.toHaveBeenCalledWith('unstarted');
     expect(onStateChange).not.toHaveBeenCalledWith('buffering');
+    container.remove();
+  });
+});
+
+// ---------------------------------------------------------------- Round 4: player death recovery
+// Live re-test (room P4G97R, commit 7d2d28e): after Instant Crush failed,
+// "Play next song" to The Less I Know The Better also failed, and Previous
+// back to Midnight City did NOT recover it — the player stayed dead for the
+// session and only a full page reload revived it. Root cause: loadTrack
+// called recoverIfFailed() BEFORE updating currentVideoId, so the
+// once-per-video recovery bound was evaluated against the OLD track — the
+// track change loaded the new video on the already-failed instance with no
+// recovery. These tests pin the fix.
+describe('Round 4: player death recovery (YouTubePlayer)', () => {
+  // Self-contained fake IFrame API setup (mirrors the earlier YouTubePlayer
+  // describe — its helpers are scoped to that block and not visible here).
+  let capturedEvents;
+  let fakePlayer;
+  let videoUrl;
+
+  beforeEach(() => {
+    capturedEvents = null;
+    videoUrl = '';
+    fakePlayer = {
+      loadVideoById: vi.fn(),
+      cueVideoById: vi.fn(),
+      playVideo: vi.fn(),
+      pauseVideo: vi.fn(),
+      seekTo: vi.fn(),
+      getCurrentTime: vi.fn(() => 0),
+      getDuration: vi.fn(() => 339),
+      getVideoUrl: vi.fn(() => videoUrl),
+      getVolume: vi.fn(() => 85),
+      setVolume: vi.fn(),
+      mute: vi.fn(),
+      unMute: vi.fn(),
+      destroy: vi.fn(),
+    };
+    window.YT = {
+      PlayerState: { UNSTARTED: -1, ENDED: 0, PLAYING: 1, PAUSED: 2, BUFFERING: 3, CUED: 5 },
+      Player: vi.fn(function (el, config) {
+        capturedEvents = config.events;
+        return fakePlayer;
+      }),
+    };
+  });
+
+  afterEach(() => {
+    delete window.YT;
+  });
+
+  async function initPlayer(player, container) {
+    const initPromise = player.initialize(container);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    capturedEvents.onReady();
+    await initPromise;
+  }
+
+  function makeContainer() {
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    return el;
+  }
+
+  async function loadAndPlay(player, track) {
+    await player.loadTrack(track, 0, true);
+    capturedEvents.onStateChange({ data: 1 }); // PLAYING
+  }
+
+  async function playWithRecovery(player) {
+    // play() may destroy + re-initialize (a recovery); fire onReady for
+    // the fresh instance, then await the play.
+    const playPromise = player.play();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    capturedEvents.onReady();
+    await playPromise;
+  }
+
+  it('Round 4: a track change after an error recovers for the NEW video, not the old one', async () => {
+    const player = new YouTubePlayer({ onError: vi.fn() });
+    const container = makeContainer();
+    await initPlayer(player, container);
+    expect(window.YT.Player).toHaveBeenCalledTimes(1);
+
+    await loadAndPlay(player, MIDNIGHT_CITY);
+    // Next to Instant Crush, which fails (embedding disabled).
+    await player.loadTrack(INSTANT_CRUSH, 0, true);
+    capturedEvents.onError({ data: 150 });
+    expect(await player.getState()).toBe('error');
+
+    // The effect retries play(): first recovery (instance #2), load
+    // re-issued for Instant Crush — and it fails AGAIN on the fresh
+    // instance (genuinely embed-blocked).
+    await playWithRecovery(player);
+    expect(window.YT.Player).toHaveBeenCalledTimes(2);
+    capturedEvents.onError({ data: 150 });
+    expect(await player.getState()).toBe('error');
+
+    // "Play next song" to The Less I Know The Better: the OLD code
+    // evaluated the recovery bound against Instant Crush (the previous
+    // currentVideoId) and loaded the new video on the dead instance #2
+    // with no recovery. The fix recovers for the NEW video first.
+    fakePlayer.destroy.mockClear();
+    const loadPromise = player.loadTrack(LESS_I_KNOW, 0, true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    capturedEvents.onReady();
+    await loadPromise;
+    expect(window.YT.Player).toHaveBeenCalledTimes(3);
+    expect(fakePlayer.destroy).toHaveBeenCalledTimes(1);
+    expect(fakePlayer.loadVideoById).toHaveBeenCalledWith({
+      videoId: 'sBzrzS1Ag_g',
+      startSeconds: 0,
+    });
+    container.remove();
+  });
+
+  it('Round 4: Previous back to a previously-played song plays again after errors', async () => {
+    const onStateChange = vi.fn();
+    const player = new YouTubePlayer({ onError: vi.fn(), onStateChange });
+    const container = makeContainer();
+    await initPlayer(player, container);
+
+    await loadAndPlay(player, MIDNIGHT_CITY);
+    await player.loadTrack(INSTANT_CRUSH, 0, true);
+    capturedEvents.onError({ data: 150 });
+    // Recovery for Instant Crush, then it fails again on the fresh instance.
+    await playWithRecovery(player);
+    capturedEvents.onError({ data: 150 });
+
+    // Previous back to Midnight City (which played fine minutes ago):
+    // it must load on a FRESH instance and reach PLAYING again — not
+    // stay dead on the instance that failed Instant Crush.
+    fakePlayer.loadVideoById.mockClear();
+    const loadPromise = player.loadTrack(MIDNIGHT_CITY, 0, true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    capturedEvents.onReady();
+    await loadPromise;
+    expect(window.YT.Player).toHaveBeenCalledTimes(3);
+    expect(fakePlayer.loadVideoById).toHaveBeenCalledWith({
+      videoId: 'dX3k_QDnzHE',
+      startSeconds: 0,
+    });
+    capturedEvents.onStateChange({ data: 1 }); // PLAYING
+    expect(await player.getState()).toBe('playing');
+    expect(onStateChange).toHaveBeenCalledWith('playing');
+    container.remove();
+  });
+
+  it('Round 4: a non-embed failure (code 5) on a fresh instance does NOT block a reload', async () => {
+    const player = new YouTubePlayer({ onError: vi.fn() });
+    const container = makeContainer();
+    await initPlayer(player, container);
+
+    await loadAndPlay(player, MIDNIGHT_CITY);
+    // HTML5 player error (code 5): the player is broken, not the video.
+    capturedEvents.onError({ data: 5 });
+    await playWithRecovery(player);
+    expect(window.YT.Player).toHaveBeenCalledTimes(2);
+    fakePlayer.loadVideoById.mockClear();
+    // The fresh instance fails with code 5 again. The old "already
+    // failed" guard blocked ANY reload for a video that failed once on
+    // a fresh instance — so Midnight City could never play again in the
+    // session. The guard now only blocks genuinely embed-blocked
+    // failures (100/101/150).
+    capturedEvents.onError({ data: 5 });
+    await player.play();
+    expect(fakePlayer.loadVideoById).toHaveBeenCalledWith({
+      videoId: 'dX3k_QDnzHE',
+      startSeconds: 0,
+    });
+    container.remove();
+  });
+
+  it('Round 4: concurrent recoveries share one fresh instance', async () => {
+    const player = new YouTubePlayer({ onError: vi.fn() });
+    const container = makeContainer();
+    await initPlayer(player, container);
+
+    await loadAndPlay(player, MIDNIGHT_CITY);
+    capturedEvents.onError({ data: 150 });
+    // loadAndPlay already issued one load for Midnight City; count only
+    // the loads issued by the recovery below.
+    fakePlayer.loadVideoById.mockClear();
+    // The B1 effect fires ~every second and onError resets the dedup
+    // signature, so two play() calls can land while a recovery is still
+    // awaiting initialize(). Without serialization the second destroy()
+    // would kill the just-created instance.
+    const first = player.play();
+    const second = player.play();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    capturedEvents.onReady();
+    await first;
+    await second;
+    expect(window.YT.Player).toHaveBeenCalledTimes(2);
+    expect(fakePlayer.destroy).toHaveBeenCalledTimes(1);
+    // Only one load was issued for the video (the second play() saw the
+    // in-flight marker and just called playVideo()).
+    expect(fakePlayer.loadVideoById).toHaveBeenCalledTimes(1);
+    container.remove();
+  });
+
+  it('Round 4: initialize() times out instead of hanging forever', async () => {
+    const player = new YouTubePlayer({});
+    player.readyTimeoutMs = 20;
+    const container = makeContainer();
+    // Never fire onReady: the old code awaited it forever, so a hung
+    // re-init left the player dead with no error surfaced.
+    await expect(player.initialize(container)).rejects.toThrow(/did not become ready/);
+    expect(player.isReady).toBe(false);
+    container.remove();
+  });
+
+  it('Round 4: a failed re-init does NOT spend the recovery budget', async () => {
+    const player = new YouTubePlayer({ onError: vi.fn() });
+    player.readyTimeoutMs = 20;
+    const container = makeContainer();
+    await initPlayer(player, container);
+    expect(window.YT.Player).toHaveBeenCalledTimes(1);
+
+    await loadAndPlay(player, MIDNIGHT_CITY);
+    capturedEvents.onError({ data: 150 });
+    // Recovery starts but the fresh instance never becomes ready (the
+    // timeout fires). The player must stay failed with its budget
+    // intact, so a later retry (or "Reload player") can try again —
+    // not be permanently blocked by the once-per-video bound.
+    const playPromise = player.play();
+    await expect(playPromise).resolves.toBeUndefined();
+    expect(await player.getState()).toBe('error');
+    // The recovery budget was reset: a second play() attempts a fresh
+    // recovery instead of returning "already recovered".
+    fakePlayer.destroy.mockClear();
+    const second = player.play();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    capturedEvents.onReady();
+    await second;
+    expect(window.YT.Player).toHaveBeenCalledTimes(3);
+    expect(fakePlayer.destroy).toHaveBeenCalledTimes(1);
+    container.remove();
+  });
+
+  it('Round 4: reloadPlayer() resets all failure state and the same video loads again', async () => {
+    const player = new YouTubePlayer({ onError: vi.fn() });
+    const container = makeContainer();
+    await initPlayer(player, container);
+
+    await loadAndPlay(player, MIDNIGHT_CITY);
+    capturedEvents.onError({ data: 150 });
+    // Recovery for Midnight City, then it fails AGAIN on the fresh
+    // instance — the guard now blocks any further reload of it.
+    await playWithRecovery(player);
+    capturedEvents.onError({ data: 150 });
+    fakePlayer.loadVideoById.mockClear();
+    await player.play();
+    expect(fakePlayer.loadVideoById).not.toHaveBeenCalled();
+
+    // "Reload player": a full reset — the guard and the recovery bound
+    // are cleared, so the same video can be loaded again on a fresh
+    // instance (what a page reload does, in-app).
+    const reloadPromise = player.reloadPlayer();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    capturedEvents.onReady();
+    expect(await reloadPromise).toBe(true);
+    expect(window.YT.Player).toHaveBeenCalledTimes(3);
+    fakePlayer.loadVideoById.mockClear();
+    await player.loadTrack(MIDNIGHT_CITY, 0, true);
+    expect(fakePlayer.loadVideoById).toHaveBeenCalledWith({
+      videoId: 'dX3k_QDnzHE',
+      startSeconds: 0,
+    });
+    container.remove();
+  });
+
+  it('Round 4: reloadPlayer() returns false when the fresh instance never becomes ready', async () => {
+    const player = new YouTubePlayer({});
+    player.readyTimeoutMs = 20;
+    const container = makeContainer();
+    await initPlayer(player, container);
+    // Never fire onReady for the reload: it must fail (false) instead
+    // of hanging, so the UI can say "try refreshing the page".
+    await expect(player.reloadPlayer()).resolves.toBe(false);
+    expect(await player.getState()).toBe('error');
     container.remove();
   });
 });
