@@ -432,7 +432,7 @@ export default function RoomView({ isDemo = false, onLeave }) {
   const progressPct = Math.min(100, (currentSec / Math.max(1, durationSec)) * 100);
 
   return (
-    <div className={`relative min-h-screen text-white transition-colors duration-700 ${(THEME_STYLES[theme] || THEME_STYLES.midnight).bg}`}>
+    <div className={`relative min-h-screen overflow-x-hidden text-white transition-colors duration-700 ${(THEME_STYLES[theme] || THEME_STYLES.midnight).bg}`}>
       {/* Theme Background Image */}
       <div className="pointer-events-none fixed inset-0 z-0 overflow-hidden transition-opacity duration-1000" key={theme}>
         <img
@@ -648,8 +648,8 @@ export default function RoomView({ isDemo = false, onLeave }) {
             </button>
           </div>
 
-          {/* Theme pills — inline before Copy Invite Link on desktop, full-width scrollable strip on mobile */}
-          <div className="no-scrollbar order-3 flex w-full items-center gap-1 overflow-x-auto pt-0.5 lg:order-none lg:w-auto lg:pt-0">
+          {/* Theme pills — inline before Copy Invite Link on desktop, clean wrapped row on mobile */}
+          <div className="order-3 flex w-full flex-wrap items-center gap-1 pt-0.5 lg:order-none lg:w-auto lg:pt-0">
             <Palette className="h-3.5 w-3.5 shrink-0 text-zinc-500" />
             {Object.keys(THEME_STYLES).map((t) => (
               <button
@@ -661,7 +661,7 @@ export default function RoomView({ isDemo = false, onLeave }) {
                   }
                   sendCommand('room:settings', { theme: t });
                 }}
-                className={`shrink-0 rounded-full px-2.5 py-0.5 text-[11px] font-semibold capitalize transition cursor-pointer ${
+                className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold capitalize transition sm:px-2.5 cursor-pointer ${
                   theme === t
                     ? 'bg-white text-zinc-950 shadow-sm'
                     : 'bg-white/5 text-zinc-400 hover:bg-white/10 hover:text-white'
@@ -990,22 +990,22 @@ export default function RoomView({ isDemo = false, onLeave }) {
           </div>
         )}
 
-        <div className="grid gap-6 lg:grid-cols-12 lg:items-start">
+        <div className="grid gap-4 sm:gap-6 lg:grid-cols-12 lg:items-start">
           {/* Left: Player */}
-          <div className="space-y-4 sm:space-y-5 lg:col-span-7">
+          <div className="min-w-0 space-y-4 sm:space-y-5 lg:col-span-7">
             <div className="rounded-3xl border border-white/[0.08] bg-white/[0.03] p-4 shadow-2xl shadow-black/20 backdrop-blur-sm sm:p-8">
               {/* Source Switcher */}
-              <div className="flex flex-wrap items-center justify-between gap-2.5 border-b border-white/5 pb-4 sm:gap-3 sm:pb-5">
+              <div className="flex flex-col gap-3 border-b border-white/5 pb-4 sm:flex-row sm:items-center sm:justify-between sm:pb-5">
                 <div>
                   <p className="text-[11px] font-bold tracking-widest text-zinc-500 uppercase">
                     Your Phone ({isHost ? 'Host' : 'Guest'})
                   </p>
                   <p className="text-sm font-bold text-white">Playback Source</p>
                 </div>
-                <div className="inline-flex rounded-full border border-white/10 bg-white/5 p-1">
+                <div className="inline-flex w-full justify-between rounded-full border border-white/10 bg-white/5 p-1 sm:w-auto sm:justify-start">
                   <button
                     onClick={() => handleSourceSwitch('youtube')}
-                    className={`rounded-full px-2.5 py-1.5 text-xs font-semibold transition sm:px-3.5 cursor-pointer ${
+                    className={`flex-1 rounded-full px-2.5 py-1.5 text-center text-xs font-semibold transition sm:flex-none sm:px-3.5 cursor-pointer ${
                       mySource === 'youtube' ? 'bg-red-600 text-white' : 'text-zinc-400 hover:text-white'
                     }`}
                   >
@@ -1013,7 +1013,7 @@ export default function RoomView({ isDemo = false, onLeave }) {
                   </button>
                   <button
                     onClick={() => handleSourceSwitch('local')}
-                    className={`rounded-full px-2.5 py-1.5 text-xs font-semibold transition sm:px-3.5 cursor-pointer ${
+                    className={`flex-1 rounded-full px-2.5 py-1.5 text-center text-xs font-semibold transition sm:flex-none sm:px-3.5 cursor-pointer ${
                       mySource === 'local' ? 'bg-violet-600 text-white' : 'text-zinc-400 hover:text-white'
                     }`}
                   >
@@ -1022,9 +1022,9 @@ export default function RoomView({ isDemo = false, onLeave }) {
                   <button
                     disabled
                     title="Spotify playback unavailable pending policy authorization"
-                    className="rounded-full px-2.5 py-1.5 text-xs font-semibold text-zinc-600 sm:px-3 cursor-not-allowed"
+                    className="flex-1 rounded-full px-2 py-1.5 text-center text-xs font-semibold text-zinc-600 sm:flex-none sm:px-3 cursor-not-allowed"
                   >
-                    Spotify (Soon)
+                    Spotify
                   </button>
                 </div>
               </div>
@@ -1222,7 +1222,7 @@ export default function RoomView({ isDemo = false, onLeave }) {
           </div>
 
           {/* Right: Queue, Search & Private Chat */}
-          <div ref={rightPanelRef} className="lg:col-span-5">
+          <div ref={rightPanelRef} className="min-w-0 lg:col-span-5">
             <div className="flex flex-col rounded-3xl border border-white/[0.08] bg-white/[0.03] p-5 shadow-xl shadow-black/10 backdrop-blur-sm sm:p-6">
               <div className="flex items-center justify-between border-b border-white/5 pb-4">
                 <div className="inline-flex rounded-full bg-white/5 p-1">
