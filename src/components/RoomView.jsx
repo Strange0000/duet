@@ -36,12 +36,21 @@ import { searchRealSongs } from '../utils/artworkApi';
 import AudioVisualizerCanvas from './AudioVisualizerCanvas';
 
 const THEME_STYLES = {
-  midnight: 'bg-zinc-950',
-  aurora: 'bg-gradient-to-b from-slate-950 via-emerald-950/30 to-zinc-950',
-  sunset: 'bg-gradient-to-b from-zinc-950 via-rose-950/30 to-zinc-950',
-  rose: 'bg-gradient-to-b from-zinc-950 via-pink-950/25 to-zinc-950',
-  ocean: 'bg-gradient-to-b from-slate-950 via-sky-950/30 to-zinc-950',
-  minimal: 'bg-black',
+  midnight: { bg: 'bg-zinc-950', accent: '#7c3aed', image: '/themes/midnight-bg.jpg' },
+  aurora: { bg: 'bg-gradient-to-b from-slate-950 via-emerald-950/30 to-zinc-950', accent: '#10b981', image: '/themes/aurora-bg.jpg' },
+  sunset: { bg: 'bg-gradient-to-b from-zinc-950 via-rose-950/30 to-zinc-950', accent: '#f97316', image: '/themes/sunset-bg.jpg' },
+  rose: { bg: 'bg-gradient-to-b from-zinc-950 via-pink-950/25 to-zinc-950', accent: '#ec4899', image: '/themes/rose-bg.jpg' },
+  ocean: { bg: 'bg-gradient-to-b from-slate-950 via-sky-950/30 to-zinc-950', accent: '#0ea5e9', image: '/themes/ocean-bg.jpg' },
+  minimal: { bg: 'bg-black', accent: '#a1a1aa', image: '/themes/minimal-bg.jpg' },
+};
+
+const THEME_PILL_COLORS = {
+  midnight: 'bg-violet-500',
+  aurora: 'bg-emerald-500',
+  sunset: 'bg-orange-500',
+  rose: 'bg-pink-500',
+  ocean: 'bg-sky-500',
+  minimal: 'bg-zinc-500',
 };
 
 const REACTION_EMOJIS = ['❤️', '🔥', '🎵', '😊', '✨', '😭'];
@@ -421,7 +430,12 @@ export default function RoomView({ isDemo = false, onLeave }) {
   const progressPct = Math.min(100, (currentSec / Math.max(1, durationSec)) * 100);
 
   return (
-    <div className={`min-h-screen text-white transition-colors duration-700 ${THEME_STYLES[theme] || THEME_STYLES.midnight}`}>
+    <div className={`relative min-h-screen text-white transition-colors duration-700 ${(THEME_STYLES[theme] || THEME_STYLES.midnight).bg}`}>
+      {/* Theme Background Image */}
+      <div className="pointer-events-none fixed inset-0 z-0 transition-opacity duration-1000" key={theme}>
+        <img src={(THEME_STYLES[theme] || THEME_STYLES.midnight).image} alt="" className="h-full w-full object-cover opacity-15" />
+        <div className="absolute inset-0 bg-gradient-to-b from-zinc-950/50 via-zinc-950/80 to-zinc-950" />
+      </div>
       {/* Session Summary Modal */}
       {showSessionSummary && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm">
@@ -590,81 +604,82 @@ export default function RoomView({ isDemo = false, onLeave }) {
       </div>
 
       {/* Header */}
-      <header className="sticky top-0 z-30 border-b border-white/5 bg-zinc-950/85 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-3.5 sm:px-8">
+      <header className="sticky top-0 z-30 border-b border-white/5 bg-zinc-950/90 backdrop-blur-xl">
+        {/* Row 1: Logo, Room Code, Status, Notifications, Settings */}
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-2.5 sm:px-8">
           <div className="flex items-center gap-2.5">
             <button
               onClick={handleLeaveClick}
-              className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-white/5 text-zinc-300 transition hover:bg-white/10 cursor-pointer"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-white/5 text-zinc-300 transition hover:bg-white/10 cursor-pointer"
               aria-label="Leave room"
             >
-              <ArrowLeft className="h-4 w-4" />
+              <ArrowLeft className="h-3.5 w-3.5" />
             </button>
             <div className="flex items-center gap-2">
-              <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-white text-zinc-950">
-                <Radio className="h-4 w-4" />
+              <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-white text-zinc-950">
+                <Radio className="h-3.5 w-3.5" />
               </span>
-              <span className="font-display text-lg font-bold tracking-tight">Duet</span>
+              <span className="font-display text-base font-bold tracking-tight">Duet</span>
             </div>
 
             {isDemo && (
-              <span className="rounded-full bg-amber-500/15 px-2.5 py-1 text-[11px] font-bold tracking-wide text-amber-300 ring-1 ring-amber-500/30">
-                DEMO MODE
+              <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold tracking-wide text-amber-300 ring-1 ring-amber-500/30">
+                DEMO
               </span>
             )}
 
             <button
               onClick={handleCopyCode}
-              className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-semibold tracking-wider text-white transition hover:bg-white/10 cursor-pointer"
+              className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-bold tracking-wider text-white transition hover:bg-white/10 cursor-pointer"
               title="Copy room code"
             >
               <span>{roomCode}</span>
               {copied ? (
-                <Check className="h-3.5 w-3.5 text-emerald-400" />
+                <Check className="h-3 w-3 text-emerald-400" />
               ) : (
-                <Copy className="h-3.5 w-3.5 text-zinc-500" />
+                <Copy className="h-3 w-3 text-zinc-500" />
               )}
             </button>
 
             {!isDemo && (
               <button
                 onClick={handleCopyInviteLink}
-                className="hidden rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-semibold text-zinc-300 transition hover:bg-white/10 sm:inline-flex cursor-pointer"
+                className="hidden rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-semibold text-zinc-300 transition hover:bg-white/10 sm:inline-flex cursor-pointer"
               >
-                {copiedLink ? 'Invite Copied!' : 'Copy Invite Link'}
+                {copiedLink ? 'Copied!' : 'Copy Invite Link'}
               </button>
             )}
           </div>
 
           <div className="flex items-center gap-2">
-            {/* Real Sync & Telemetry Pill */}
+            {/* Sync Status */}
             <button
               onClick={() => setShowMetrics((m) => !m)}
-              className="inline-flex items-center gap-2 rounded-full bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-400 cursor-pointer"
-              title="Click for synchronization metrics"
+              className="hidden sm:inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-2.5 py-1 text-[11px] font-semibold text-emerald-400 cursor-pointer"
+              title="Synchronization metrics"
             >
-              <span className="relative flex h-2 w-2">
+              <span className="relative flex h-1.5 w-1.5">
                 <span className="animate-pulse-ring absolute inline-flex h-full w-full rounded-full bg-emerald-400" />
-                <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+                <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-500" />
               </span>
               <span>{isDemo ? 'Simulated' : roomState?.lifecycleState || connectionStatus}</span>
-              {!isDemo && <span className="text-emerald-400/70">• {syncMetrics.rttMs}ms RTT</span>}
+              {!isDemo && <span className="text-emerald-400/70">&middot; {syncMetrics.rttMs}ms RTT</span>}
             </button>
 
             {!isDemo && (
-              <div className="relative flex items-center gap-2" data-notifications-menu>
+              <div className="relative flex items-center gap-1.5" data-notifications-menu>
                 <button
                   onClick={() => {
                     setShowNotifications((n) => !n);
                     setShowSettings(false);
                   }}
-                  className="relative inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-white/5 text-zinc-300 transition hover:bg-white/10 cursor-pointer"
+                  className="relative inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-white/5 text-zinc-300 transition hover:bg-white/10 cursor-pointer"
                   aria-label="Notifications"
                   title="Notifications"
                 >
-                  <Bell className="h-4 w-4" />
+                  <Bell className="h-3.5 w-3.5" />
                   {(unreadChatCount + (roomState?.pendingJoins?.length || 0)) > 0 && (
-                    <span className="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-bold text-white">
+                    <span className="absolute -top-0.5 -right-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-rose-500 px-0.5 text-[9px] font-bold text-white">
                       {unreadChatCount + (roomState?.pendingJoins?.length || 0) > 9
                         ? '9+'
                         : unreadChatCount + (roomState?.pendingJoins?.length || 0)}
@@ -673,7 +688,7 @@ export default function RoomView({ isDemo = false, onLeave }) {
                 </button>
 
                 {showNotifications && (
-                  <div className="absolute top-11 right-0 z-50 w-72 overflow-hidden rounded-2xl border border-white/10 bg-zinc-900 p-2 shadow-2xl backdrop-blur-xl sm:w-80">
+                  <div className="absolute top-10 right-0 z-50 w-72 overflow-hidden rounded-2xl border border-white/10 bg-zinc-900 p-2 shadow-2xl backdrop-blur-xl sm:w-80">
                     <div className="flex items-center justify-between px-3 py-2">
                       <span className="text-[11px] font-bold tracking-widest text-zinc-500 uppercase">Notifications</span>
                       {notifications.length > 0 && (
@@ -750,15 +765,15 @@ export default function RoomView({ isDemo = false, onLeave }) {
                     setShowSettings((s) => !s);
                     setShowNotifications(false);
                   }}
-                  className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-white/5 text-zinc-300 transition hover:bg-white/10 cursor-pointer"
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-white/5 text-zinc-300 transition hover:bg-white/10 cursor-pointer"
                   aria-label="Room settings"
                 >
-                  <Settings className="h-4 w-4" />
+                  <Settings className="h-3.5 w-3.5" />
                 </button>
               </div>
             )}
 
-            {/* Demo-only perspective switcher */}
+            {/* Demo perspective switcher */}
             {isDemo && (
               <div className="inline-flex items-center rounded-full border border-white/10 bg-white/5 p-0.5">
                 <button
@@ -785,9 +800,9 @@ export default function RoomView({ isDemo = false, onLeave }) {
           </div>
         </div>
 
-        {/* Expandable Real Sync Metrics Drawer */}
+        {/* Expandable Sync Metrics */}
         {showMetrics && !isDemo && (
-          <div className="border-t border-white/5 bg-zinc-900/80 px-4 py-3 sm:px-8">
+          <div className="border-t border-white/5 bg-zinc-900/80 px-4 py-2.5 sm:px-8">
             <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 text-xs text-zinc-400">
               <div className="flex flex-wrap gap-5 font-mono">
                 <span>RTT: <strong className="text-white">{syncMetrics.rttMs}ms</strong></span>
@@ -806,20 +821,23 @@ export default function RoomView({ isDemo = false, onLeave }) {
           </div>
         )}
 
-        {/* Room Settings & Themes Drawer */}
-        {showSettings && !isDemo && (
-          <div className="border-t border-white/5 bg-zinc-900/90 px-4 py-4 sm:px-8">
-            <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4">
-              <div className="flex flex-wrap items-center gap-2">
-                <Palette className="h-4 w-4 text-zinc-400" />
-                <span className="text-xs font-semibold text-zinc-400">Theme:</span>
+        {/* Row 2: Theme Pills + Settings Checkboxes + Privacy + End Room — always visible toolbar */}
+        {!isDemo && (
+          <div className="border-t border-white/5 bg-zinc-950/70 px-4 py-2 sm:px-8">
+            <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-x-4 gap-y-2">
+              {/* Theme selector */}
+              <div className="flex items-center gap-1.5">
+                <Palette className="h-3.5 w-3.5 text-zinc-500" />
+                <span className="text-[11px] font-semibold text-zinc-500 mr-1">Theme:</span>
                 {Object.keys(THEME_STYLES).map((t) => (
                   <button
                     key={t}
                     disabled={!canControl}
                     onClick={() => sendCommand('room:settings', { theme: t })}
-                    className={`rounded-full px-3 py-1 text-xs font-semibold capitalize transition cursor-pointer disabled:opacity-50 ${
-                      theme === t ? 'bg-white text-zinc-950' : 'bg-white/5 text-zinc-300 hover:bg-white/10'
+                    className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold capitalize transition cursor-pointer disabled:opacity-50 ${
+                      theme === t
+                        ? 'bg-white text-zinc-950 shadow-sm'
+                        : 'bg-white/5 text-zinc-400 hover:bg-white/10 hover:text-white'
                     }`}
                   >
                     {t}
@@ -827,39 +845,40 @@ export default function RoomView({ isDemo = false, onLeave }) {
                 ))}
               </div>
 
-              <div className="flex flex-wrap items-center gap-3">
+              {/* Settings checkboxes + actions */}
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
                 {canControl && (
                   <>
-                    <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer">
+                    <label className="flex items-center gap-1.5 text-[11px] text-zinc-400 cursor-pointer select-none hover:text-zinc-200 transition">
                       <input
                         type="checkbox"
                         checked={Boolean(roomState?.settings?.allowGuestQueue)}
                         onChange={(e) =>
                           sendCommand('room:settings', { allowGuestQueue: e.target.checked })
                         }
-                        className="accent-violet-500"
+                        className="accent-violet-500 h-3.5 w-3.5"
                       />
                       Allow guest to add songs
                     </label>
-                    <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer">
+                    <label className="flex items-center gap-1.5 text-[11px] text-zinc-400 cursor-pointer select-none hover:text-zinc-200 transition">
                       <input
                         type="checkbox"
                         checked={Boolean(roomState?.settings?.allowGuestControl)}
                         onChange={(e) =>
                           sendCommand('room:settings', { allowGuestControl: e.target.checked })
                         }
-                        className="accent-violet-500"
+                        className="accent-violet-500 h-3.5 w-3.5"
                       />
                       Allow guest full control
                     </label>
-                    <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer">
+                    <label className="flex items-center gap-1.5 text-[11px] text-zinc-400 cursor-pointer select-none hover:text-zinc-200 transition">
                       <input
                         type="checkbox"
                         checked={Boolean(roomState?.settings?.requireApproval)}
                         onChange={(e) =>
                           sendCommand('room:settings', { requireApproval: e.target.checked })
                         }
-                        className="accent-violet-500"
+                        className="accent-violet-500 h-3.5 w-3.5"
                       />
                       Require approval to join
                     </label>
@@ -867,26 +886,14 @@ export default function RoomView({ isDemo = false, onLeave }) {
                 )}
                 <button
                   onClick={() => setShowPrivacy(true)}
-                  className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold text-zinc-300 hover:bg-white/10 cursor-pointer"
+                  className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/5 px-2.5 py-0.5 text-[11px] font-semibold text-zinc-400 hover:bg-white/10 hover:text-white cursor-pointer transition"
                 >
                   <Shield className="h-3 w-3" /> Privacy
                 </button>
-                {isHost && partnerParticipant && (
-                  <button
-                    onClick={() =>
-                      sendCommand('room:transfer-host', {
-                        targetParticipantId: partnerParticipant.id,
-                      })
-                    }
-                    className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold text-zinc-300 hover:bg-white/10 cursor-pointer"
-                  >
-                    Make {partnerParticipant.name} Host
-                  </button>
-                )}
                 {isHost && (
                   <button
                     onClick={() => sendCommand('room:close', {})}
-                    className="rounded-full bg-rose-600/20 px-3 py-1 text-xs font-semibold text-rose-300 hover:bg-rose-600/30 cursor-pointer"
+                    className="rounded-full bg-emerald-600 px-3 py-1 text-[11px] font-bold text-white hover:bg-emerald-700 cursor-pointer transition"
                   >
                     End Room
                   </button>
@@ -897,7 +904,7 @@ export default function RoomView({ isDemo = false, onLeave }) {
         )}
       </header>
 
-      <main className="mx-auto max-w-7xl px-4 py-6 sm:px-8 sm:py-8">
+      <main className="relative z-10 mx-auto max-w-7xl px-4 py-6 sm:px-8 sm:py-8">
         {/* Errors */}
         {(roomError || playerError) && (
           <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-xs text-rose-200">
@@ -948,7 +955,7 @@ export default function RoomView({ isDemo = false, onLeave }) {
         <div className="grid gap-6 lg:grid-cols-12 lg:items-start">
           {/* Left: Player */}
           <div className="space-y-5 lg:col-span-7">
-            <div className="rounded-3xl border border-white/5 bg-white/[0.02] p-5 sm:p-8">
+            <div className="rounded-3xl border border-white/[0.08] bg-white/[0.03] p-5 shadow-2xl shadow-black/20 backdrop-blur-sm sm:p-8">
               {/* Source Switcher */}
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/5 pb-5">
                 <div>
@@ -1080,7 +1087,7 @@ export default function RoomView({ isDemo = false, onLeave }) {
                   <button onClick={() => handleStep(-1)} disabled={!canControl} aria-label="Previous" className="flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-white/5 text-zinc-300 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer">
                     <SkipBack className="h-4 w-4" />
                   </button>
-                  <button onClick={handlePlayPause} disabled={!canControl} aria-label={isPlaying ? 'Pause' : 'Play'} className="flex h-14 w-14 items-center justify-center rounded-full bg-white text-zinc-950 shadow-lg transition-all hover:bg-zinc-200 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer">
+                  <button onClick={handlePlayPause} disabled={!canControl} aria-label={isPlaying ? 'Pause' : 'Play'} className="flex h-14 w-14 items-center justify-center rounded-full bg-white text-zinc-950 shadow-lg shadow-white/20 transition-all hover:bg-zinc-200 hover:shadow-white/30 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer">
                     {isPlaying ? <Pause className="h-5 w-5 fill-current" /> : <Play className="h-5 w-5 translate-x-0.5 fill-current" />}
                   </button>
                   <button onClick={() => handleStep(1)} disabled={!canControl} aria-label="Next" className="flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-white/5 text-zinc-300 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer">
@@ -1114,7 +1121,7 @@ export default function RoomView({ isDemo = false, onLeave }) {
             </div>
 
             {/* Partner Mirror */}
-            <div className="rounded-3xl border border-white/5 bg-white/[0.02] p-5 sm:p-6">
+            <div className="rounded-3xl border border-white/[0.08] bg-white/[0.03] p-5 shadow-xl shadow-black/10 backdrop-blur-sm sm:p-6">
               <div className="flex flex-wrap items-center justify-between gap-4">
                 <div className="flex items-center gap-3.5">
                   <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white/5 text-zinc-300 ring-1 ring-white/10">
@@ -1178,7 +1185,7 @@ export default function RoomView({ isDemo = false, onLeave }) {
 
           {/* Right: Queue, Search & Private Chat */}
           <div ref={rightPanelRef} className="lg:col-span-5">
-            <div className="flex flex-col rounded-3xl border border-white/5 bg-white/[0.02] p-5 sm:p-6">
+            <div className="flex flex-col rounded-3xl border border-white/[0.08] bg-white/[0.03] p-5 shadow-xl shadow-black/10 backdrop-blur-sm sm:p-6">
               <div className="flex items-center justify-between border-b border-white/5 pb-4">
                 <div className="inline-flex rounded-full bg-white/5 p-1">
                   <button

@@ -141,6 +141,35 @@
   pointer-events: none;
 }
 
+/* ——— Theme-specific ambient animations ——— */
+
+@keyframes auroraShimmer {
+  0%, 100% { opacity: 0.12; filter: hue-rotate(0deg); }
+  50%      { opacity: 0.2; filter: hue-rotate(20deg); }
+}
+
+@keyframes sunsetPulse {
+  0%, 100% { opacity: 0.1; transform: scale(1); }
+  50%      { opacity: 0.18; transform: scale(1.02); }
+}
+
+@keyframes oceanWave {
+  0%, 100% { transform: translateY(0) scale(1); opacity: 0.12; }
+  33%      { transform: translateY(-2px) scale(1.01); opacity: 0.18; }
+  66%      { transform: translateY(2px) scale(0.99); opacity: 0.14; }
+}
+
+@keyframes rosePetal {
+  0%, 100% { opacity: 0.1; transform: rotate(0deg) scale(1); }
+  50%      { opacity: 0.17; transform: rotate(1deg) scale(1.01); }
+}
+
+@keyframes midnightTwinkle {
+  0%, 100% { opacity: 0.1; }
+  25%      { opacity: 0.18; }
+  75%      { opacity: 0.08; }
+}
+
 /* ——— Scrollbar ——— */
 
 ::-webkit-scrollbar       { width: 6px; height: 6px; }
