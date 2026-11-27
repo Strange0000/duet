@@ -1360,7 +1360,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                   Find Embeddable Version
                 </button>
               )}
-              {playerError?.isEmbedBlocked && canControl && (
+              {(playerError?.isEmbedBlocked || playerError?.code === 'PLAY_STALLED') && canControl && (
                 <button
                   onClick={async () => {
                     setPlayerError(null);

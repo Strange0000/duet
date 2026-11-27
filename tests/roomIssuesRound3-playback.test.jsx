@@ -127,6 +127,13 @@ describe('resolvePlaybackStatus (R4)', () => {
     ).toBe('in-sync');
   });
 
+  it('requires measured playback on both sides before showing In sync', () => {
+    expect(resolvePlaybackStatus({ ...readyRoom, partnerDriftMs: 25000 })).toBe('syncing');
+    expect(resolvePlaybackStatus({ ...readyRoom, partnerPlaybackConfirmed: false })).toBe('syncing');
+    expect(resolvePlaybackStatus({ ...readyRoom, localPlaybackConfirmed: false })).toBe('syncing');
+    expect(resolvePlaybackStatus({ ...readyRoom, driftMs: 250, partnerDriftMs: -250 })).toBe('syncing');
+  });
+
   it('treats buffering as playing when the position is advancing', () => {
     expect(
       resolvePlaybackStatus({
@@ -199,17 +206,18 @@ describe('shouldReapplyPlayback after an error (F1)', () => {
     playbackState: 'playing',
   };
 
-  it('re-applies the same playing command when the player errored (not "already trying")', () => {
-    // Before the fix the player stayed 'buffering' after an error, which is
-    // in the leave-alone list — so the effect never retried the failed load.
-    expect(shouldReapplyPlayback({ ...base, livePlayerState: 'error' })).toBe(true);
+  it('waits for a fresh play command after an error', () => {
+    expect(shouldReapplyPlayback({ ...base, livePlayerState: 'error' })).toBe(false);
+    expect(shouldReapplyPlayback({
+      ...base, signature: 'trk-1:1:playing:0:2000:', livePlayerState: 'error',
+    })).toBe(true);
   });
 
   it('still leaves a buffering player alone (the pre-existing R1 behaviour)', () => {
     expect(shouldReapplyPlayback({ ...base, livePlayerState: 'buffering' })).toBe(false);
   });
 
-  it('re-applies a paused-room command when the player errored', () => {
+  it('leaves a failed player alone while the room is paused', () => {
     expect(
       shouldReapplyPlayback({
         ...base,
@@ -218,7 +226,7 @@ describe('shouldReapplyPlayback after an error (F1)', () => {
         lastSignature: 'trk-1:1:paused:0:1000:',
         livePlayerState: 'error',
       })
-    ).toBe(true);
+    ).toBe(false);
   });
 });
 
@@ -424,7 +432,12 @@ describe('YouTubePlayer (R1 first Play, R5 stale duration)', () => {
     expect(await player.getDuration()).toBe(0);
     // Once the new video is actually loaded, the real duration is reported.
     videoUrl = 'https://www.youtube.com/watch?v=a5uQMwRMHcs';
+    expect(await player.getDuration()).toBe(0);
+    capturedEvents.onStateChange({ data: 1 });
     expect(await player.getDuration()).toBe(339000);
+    capturedEvents.onError({ data: 150 });
+    expect(await player.getDuration()).toBe(0);
+    expect(await player.getLoadedVideoId()).toBeNull();
     container.remove();
   });
 
@@ -513,7 +526,7 @@ describe('YouTubePlayer (R1 first Play, R5 stale duration)', () => {
     expect(window.YT.Player).toHaveBeenCalledTimes(2);
     expect(fakePlayer.destroy).not.toHaveBeenCalled();
     expect(fakePlayer.loadVideoById).not.toHaveBeenCalled();
-    expect(fakePlayer.playVideo).toHaveBeenCalled();
+    expect(fakePlayer.playVideo).not.toHaveBeenCalled();
     container.remove();
   });
 
@@ -537,6 +550,50 @@ describe('YouTubePlayer (R1 first Play, R5 stale duration)', () => {
       videoId: 'a5uQMwRMHcs',
       startSeconds: 0,
     });
+    container.remove();
+  });
+
+  it('replaces a failed retry on skip and lets the latest skip win while rebuilding', async () => {
+    const player = new YouTubePlayer();
+    const container = makeContainer();
+    await initPlayer(player, container);
+
+    await player.loadTrack(INSTANT_CRUSH, 0, true);
+    capturedEvents.onError({ data: 150 });
+    const retry = player.play();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    capturedEvents.onReady();
+    await retry;
+    const deadEvents = capturedEvents;
+    deadEvents.onError({ data: 150 });
+
+    fakePlayer.loadVideoById.mockClear();
+    const next = player.loadTrack(MIDNIGHT_CITY, 0, true);
+    const latest = player.loadTrack(INSTANT_CRUSH, 5000, true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    deadEvents.onError({ data: 150 });
+    capturedEvents.onReady();
+    await Promise.all([next, latest]);
+    expect(window.YT.Player).toHaveBeenCalledTimes(3);
+    expect(fakePlayer.loadVideoById).toHaveBeenCalledExactlyOnceWith({
+      videoId: INSTANT_CRUSH.youtubeId,
+      startSeconds: 5,
+    });
+    container.remove();
+  });
+
+  it('accepts confirmed playback after a startup timeout', async () => {
+    const onStateChange = vi.fn();
+    const player = new YouTubePlayer({ onStateChange });
+    const container = makeContainer();
+    await initPlayer(player, container);
+    await player.loadTrack(INSTANT_CRUSH, 0, true);
+
+    player.markFailed({ allowLateStart: true });
+    videoUrl = 'https://www.youtube.com/watch?v=a5uQMwRMHcs';
+    capturedEvents.onStateChange({ data: 1 });
+    expect(await player.getState()).toBe('playing');
+    expect(onStateChange).toHaveBeenLastCalledWith('playing');
     container.remove();
   });
 

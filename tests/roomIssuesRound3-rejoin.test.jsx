@@ -39,6 +39,7 @@ vi.mock('../src/services/socketClient', () => ({
 import { RoomContext, RoomProvider, useRoom } from '../src/context/RoomContext.jsx';
 import { emitAck } from '../src/services/socketClient';
 import RoomView from '../src/components/RoomView.jsx';
+import { backgroundAudio } from '../src/utils/backgroundAudio';
 import { INITIAL_TRACKS } from '../src/data/mockTracks.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -121,6 +122,9 @@ function Probe() {
       <span data-testid="reported">{ctx.syncMetrics.reportedPositionMs}</span>
       <span data-testid="expected">{ctx.syncMetrics.expectedPositionMs}</span>
       <span data-testid="theme">{ctx.roomState?.settings?.theme || ''}</span>
+      <span data-testid="sync-status">{ctx.syncStatus}</span>
+      <span data-testid="player-error">{ctx.playerError?.code || ''}</span>
+      <button data-testid="unlock" onClick={ctx.unlockAudio}>unlock</button>
       <span data-testid="audio">{String(ctx.audioUnlocked)}</span>
       <span data-testid="room-error">{ctx.roomError || ''}</span>
       <span data-testid="cmd-result">{cmdResult}</span>
@@ -243,6 +247,68 @@ describe('R6: rejoin adopts position + theme before the audio-unlock tap', () =>
     expect(text('theme')).toBe('sunset');
     expect(text('reported')).toBe('55000');
   });
+});
+
+it('measures drift through frequent room updates and freezes progress on a failed video', async () => {
+  vi.useFakeTimers();
+  const unlock = vi.spyOn(backgroundAudio, 'unlock').mockResolvedValue();
+  let events;
+  let position = 35;
+  const fakePlayer = {
+    loadVideoById: vi.fn(),
+    playVideo: vi.fn(),
+    seekTo: vi.fn(),
+    setVolume: vi.fn(),
+    getCurrentTime: () => position,
+    getDuration: () => 250,
+    getVideoUrl: () => `https://www.youtube.com/watch?v=${INITIAL_TRACKS[0].youtubeId}`,
+  };
+  vi.stubGlobal('YT', {
+    PlayerState: { PLAYING: 1 },
+    Player: function (_element, config) {
+      events = config.events;
+      queueMicrotask(() => events.onReady());
+      return fakePlayer;
+    },
+  });
+
+  try {
+    const state = makeRoomState();
+    state.participants[1].ready = true;
+    state.participants[0].driftMs = 0;
+    state.playback = {
+      ...state.playback,
+      trackId: INITIAL_TRACKS[0].id,
+      playbackState: 'playing',
+      anchorPositionMs: 10000,
+      anchorServerTimeMs: Date.now(),
+    };
+    const { container, text } = mountProbe();
+    await act(async () => fire('room:joined', joinResult(state)));
+    await act(async () => container.querySelector('[data-testid="init-youtube"]').click());
+    await act(async () => container.querySelector('[data-testid="unlock"]').click());
+    await act(async () => events.onStateChange({ data: 1 }));
+
+    for (let i = 0; i < 4; i += 1) {
+      await act(async () => vi.advanceTimersByTimeAsync(250));
+      await act(async () => fire('room:state', { ...state, playback: { ...state.playback } }));
+    }
+    expect(fakePlayer.seekTo).toHaveBeenLastCalledWith(11, true);
+    expect(text('reported')).toBe('35000');
+    expect(text('sync-status')).toBe('syncing');
+
+    await act(async () => events.onError({ data: 150 }));
+    position = 80;
+    emitAck.mockClear();
+    await act(async () => vi.advanceTimersByTimeAsync(2000));
+    expect(text('reported')).toBe('35000');
+    expect(text('sync-status')).toBe('error');
+    expect(text('player-error')).toBe('150');
+    expect(emitAck.mock.calls.some(([event]) => event === 'player:duration')).toBe(false);
+  } finally {
+    unlock.mockRestore();
+    vi.unstubAllGlobals();
+  }
 });
 
 describe('R3: presence reflects live partner traffic, not the stale server flag', () => {

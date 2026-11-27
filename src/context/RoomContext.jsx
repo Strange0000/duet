@@ -163,7 +163,7 @@ export function RoomProvider({ children }) {
   const playerStateRef = useRef('idle');
   // R4: last player position seen by the 1s poll, so a "buffering"/"paused"
   // reading can be overruled when the position is in fact advancing.
-  const lastPlayerPositionRef = useRef(0);
+  const lastPlayerPositionRef = useRef(null);
   // R1: first-play stall watchdog — one retry, then a real error instead of
   // spinning on "Loading…" forever.
   const playWatchdogTimerRef = useRef(null);
@@ -230,12 +230,17 @@ export function RoomProvider({ children }) {
       serverPlaybackState: roomState?.playback?.playbackState,
       participantsBuffering: participants.some((p) => p.buffering),
       driftMs: syncMetrics.driftMs,
+      partnerDriftMs: partner?.driftMs,
+      partnerPlaybackConfirmed: Boolean(partnerConnected && !partner?.buffering &&
+        partner?.reportedPositionMs > 0),
+      localPlaybackConfirmed: syncMetrics.playbackSignature ===
+        computePlaybackSignature(currentTrack, roomState?.playback),
       hasPartner: participants.length >= 2 && !!partner,
       partnerReady: !!partner?.ready,
       meReady: me ? !!me.ready : participants.length < 2,
       hasRoomState: !!roomState,
     });
-  }, [roomState, session, syncMetrics.driftMs, playerState]);
+  }, [roomState, session, syncMetrics, playerState, partnerConnected, currentTrack]);
 
   // M3: volume / mute controls (UI subagent renders the slider).
   const setVolume = useCallback((v) => {
@@ -327,7 +332,7 @@ export function RoomProvider({ children }) {
     );
     setSyncMetrics((prev) => ({
       ...prev,
-      reportedPositionMs: Math.round(expectedMs),
+      reportedPositionMs: audioUnlockedRef.current ? prev.reportedPositionMs : Math.round(expectedMs),
       expectedPositionMs: Math.round(expectedMs),
       driftMs: 0,
     }));
@@ -356,7 +361,7 @@ export function RoomProvider({ children }) {
   const applyPlaybackToPlayer = useCallback(
     async (playback, track) => {
       const player = playerRef.current;
-      if (!player || !playback || !track) return;
+      if (!player || !playback || !track || (playback.trackId && playback.trackId !== track.id)) return;
 
       const trackKey = `${track.id}:${playback.trackVersion}`;
       const signature = computePlaybackSignature(track, playback);
@@ -378,6 +383,8 @@ export function RoomProvider({ children }) {
         } catch {
           liveState = null;
         }
+        if (playerRef.current !== player ||
+            computePlaybackSignature(track, roomStateRef.current?.playback) !== signature) return;
         if (
           !shouldReapplyPlayback({
             signature,
@@ -394,6 +401,11 @@ export function RoomProvider({ children }) {
         // playing while the room is paused) and genuinely needs the command.
       }
       lastAppliedPlaybackRef.current = signature;
+      const isCurrentCommand = () => {
+        const current = roomStateRef.current?.playback;
+        return playerRef.current === player && lastAppliedPlaybackRef.current === signature &&
+          computePlaybackSignature(track, current) === signature;
+      };
 
       // Cancel any pending scheduled play so a stale timeout cannot
       // seek + play on an old state after a newer one arrives.
@@ -415,34 +427,25 @@ export function RoomProvider({ children }) {
       // "Loading…"/"Buffering" forever. Cleared by onStateChange('playing')
       // and by any newer playback state (above).
       const armStallWatchdog = (anchorMs) => {
+        if (!isCurrentCommand() || !audioUnlockedRef.current) return;
         const check = async () => {
           playWatchdogTimerRef.current = null;
-          const p = playerRef.current;
-          const st = roomStateRef.current;
-          if (!p || !st?.playback || st.playback.playbackState !== 'playing') return;
-          let state = 'idle';
-          let pos = 0;
-          try {
-            state = await p.getState();
-          } catch {
-            // Treat as stalled below
-          }
-          try {
-            pos = await p.getPosition();
-          } catch {
-            // Treat as stalled below
-          }
-          if (state === 'playing' || pos - anchorMs >= 500) return;
+          if (!isCurrentCommand()) return;
+          const state = await player.getState().catch(() => null);
+          const pos = await player.getPosition().catch(() => 0);
+          if (!isCurrentCommand() || state === 'error' || state === 'playing' ||
+              playerStateRef.current === 'playing' || pos - anchorMs >= 500) return;
+
           if (playWatchdogAttemptRef.current < 1) {
             playWatchdogAttemptRef.current += 1;
-            try {
-              await p.play();
-            } catch {
-              // Second check below will surface the error
+            await player.play().catch(() => {});
+            if (isCurrentCommand() && playerStateRef.current !== 'playing') {
+              playWatchdogTimerRef.current = setTimeout(check, 4000);
             }
-            playWatchdogTimerRef.current = setTimeout(check, 4000);
             return;
           }
+
+          if (player instanceof YouTubePlayer) player.markFailed({ allowLateStart: true });
           setPlayerError({
             code: 'PLAY_STALLED',
             message:
@@ -459,6 +462,15 @@ export function RoomProvider({ children }) {
         loadedTrackKeyRef.current = trackKey;
         realDurationRef.current = 0;
         lastReportedDurationRef.current = 0;
+        lastPlayerPositionRef.current = null;
+        lastCorrectionAtRef.current = 0;
+        consecutiveDriftRef.current = 0;
+        setSyncMetrics((prev) => ({
+          ...prev,
+          reportedPositionMs: Math.round(expectedMs),
+          driftMs: 0,
+          playbackSignature: null,
+        }));
         setPlayerError(null);
         // B1: pass shouldPlay so YouTube uses loadVideoById (loads AND plays)
         // instead of cueVideoById (loads paused, losing the immediate play()).
@@ -494,15 +506,19 @@ export function RoomProvider({ children }) {
         if (delayMs > 20 && delayMs < 3000) {
           scheduledPlayTimerRef.current = setTimeout(async () => {
             scheduledPlayTimerRef.current = null;
+            if (!isCurrentCommand()) return;
             await player.seek(playback.anchorPositionMs || 0);
-            await player.play();
+            if (!isCurrentCommand()) return;
+            await player.play().catch(() => {});
             armStallWatchdog(playback.anchorPositionMs || 0);
           }, delayMs);
         } else {
           const currentPos = await player.getPosition();
+          if (!isCurrentCommand()) return;
           if (Math.abs(currentPos - expectedMs) > 450) {
             await player.seek(expectedMs);
           }
+          if (!isCurrentCommand()) return;
           await player.play();
           // R1: the first Play after a cue is the stall case — watch it.
           armStallWatchdog(expectedMs);
@@ -561,10 +577,11 @@ export function RoomProvider({ children }) {
           // relying on the server's lagging buffering/paused flags.
           playerStateRef.current = state;
           setPlayerState(state);
-          if (state === 'playing' && playWatchdogTimerRef.current) {
+          if (state === 'playing') {
             clearTimeout(playWatchdogTimerRef.current);
             playWatchdogTimerRef.current = null;
             playWatchdogAttemptRef.current = 0;
+            setPlayerError(null);
           }
           if (
             state === 'paused' &&
@@ -584,7 +601,7 @@ export function RoomProvider({ children }) {
             }, 80);
           }
           if (sessionRef.current) {
-            emitAck('player:status', { buffering: state === 'buffering' }).catch(() => {});
+            emitAck('player:status', { buffering: ['buffering', 'error', 'cued', 'unstarted'].includes(state) }).catch(() => {});
           }
         },
         onEnded: () => {
@@ -597,21 +614,8 @@ export function RoomProvider({ children }) {
         },
         onError: (err) => {
           setPlayerError(err);
-          // F1: a failed load must not stay "already applied" in the dedup:
-          // the next effect run has to re-issue the load (on a recovered
-          // player), not conclude the command is done. Reset the applied
-          // signature; the track key stays (same track), so the effect
-          // re-applies via play(), which recovers the player if needed.
-          lastAppliedPlaybackRef.current = null;
-          // F1: an embedding-disabled / removed video will never play — the
-          // specific error is already shown, so the stall watchdog must not
-          // overwrite it with a generic "Playback didn't start" after its
-          // retry. (Non-embed errors keep the watchdog's one retry.)
-          if (err?.isEmbedBlocked && playWatchdogTimerRef.current) {
-            clearTimeout(playWatchdogTimerRef.current);
-            playWatchdogTimerRef.current = null;
-            playWatchdogAttemptRef.current = 0;
-          }
+          clearTimeout(playWatchdogTimerRef.current);
+          playWatchdogTimerRef.current = null;
         },
       };
 
@@ -962,175 +966,110 @@ export function RoomProvider({ children }) {
     applyPlaybackToPlayer(roomState.playback, currentTrack).catch(() => {});
   }, [applyPlaybackToPlayer, roomState?.playback, currentTrack]);
 
-  // Periodic drift measurement & correction loop (every 1000ms while playing)
+  // Keep sampling through room:state broadcasts, which arrive whenever
+  // either participant sends a status update.
+  const roomCode = roomState?.roomCode;
+  const mySource = myParticipant?.source || 'youtube';
   useEffect(() => {
-    if (!roomState || !audioUnlocked) return;
-    const interval = setInterval(async () => {
+    if (!roomCode || !audioUnlocked) return;
+    let disposed = false;
+    let sampling = false;
+    const sample = async () => {
       const player = playerRef.current;
       const st = roomStateRef.current;
-      if (!player || !st?.playback) return;
+      const queueItem = st?.queue.find((item) => item.queueItemId === st.currentQueueItemId);
+      const track = queueItem?.track || st?.queue[0]?.track;
+      const playback = st?.playback;
+      if (!player || !playback || !track ||
+          (playback.trackId && playback.trackId !== track.id)) return;
+
+      const signature = computePlaybackSignature(track, playback);
+      const isCurrent = () => !disposed && playerRef.current === player &&
+        roomStateRef.current?.currentQueueItemId === st.currentQueueItemId &&
+        computePlaybackSignature(track, roomStateRef.current?.playback) === signature;
+      const expectedId = expectedMediaId(track, mySource);
+      const loadedId = await player.getLoadedVideoId();
+      const state = await player.getState();
+      if (!isCurrent() || state === 'error' || !expectedId || loadedId !== expectedId) return;
 
       const actualMs = await player.getPosition();
-      const estimatedNow = clockSyncRef.current.estimateServerNowMs();
-      const expectedMs = computeExpectedPositionMs(st.playback, estimatedNow);
+      const realDurationMs = await player.getDuration();
+      if (!isCurrent() || await player.getLoadedVideoId() !== loadedId ||
+          await player.getState() === 'error' || !isCurrent()) return;
 
-      // R4: poll the REAL player state every tick. onStateChange events can
-      // be missed/coalesced and the server's buffering/paused flags lag, so
-      // the pill/button must not trust either alone: if the position is
-      // advancing while the player claims to be buffering/paused, it is
-      // playing. (Position is also read by the watchdog; keep the ref fresh.)
-      const prevPos = lastPlayerPositionRef.current;
-      const positionAdvanced = actualMs - prevPos >= 500;
-      lastPlayerPositionRef.current = actualMs;
-      // R1 (follow-up): the polled state, hoisted so the seek guard below
-      // can see it — a player that has not started this track yet must
-      // never be seek-corrected.
-      let effectivePlayerState = null;
-      try {
-        const polled = await player.getState();
-        if (polled) {
-          let effective = polled;
-          if (
-            (effective === 'buffering' || effective === 'paused') &&
-            positionAdvanced &&
-            st.playback.playbackState === 'playing'
-          ) {
-            effective = 'playing';
-          }
-          effectivePlayerState = effective;
-          if (effective !== playerStateRef.current) {
-            playerStateRef.current = effective;
-            setPlayerState(effective);
-          }
-        }
-      } catch {
-        // Ignore — next tick retries; onStateChange is the other source.
+      const expectedMs = computeExpectedPositionMs(
+        playback, clockSyncRef.current.estimateServerNowMs()
+      );
+      const previous = lastPlayerPositionRef.current;
+      const advanceMs = previous?.signature === signature ? actualMs - previous.positionMs : 0;
+      lastPlayerPositionRef.current = { signature, positionMs: actualMs };
+      const playing = playback.playbackState === 'playing';
+      const effectiveState = playing && advanceMs >= 500 && advanceMs <= 2000 &&
+        (state === 'buffering' || state === 'paused') ? 'playing' : state;
+      if (effectiveState !== playerStateRef.current) {
+        playerStateRef.current = effectiveState;
+        setPlayerState(effectiveState);
+      }
+      if (effectiveState === 'playing') {
+        setPlayerError((error) => error?.code === 'PLAY_STALLED' ? null : error);
+        reportRealDuration(realDurationMs, playback, { loadedId, expectedId });
       }
 
-      // B1: which media the player has ACTUALLY loaded (computed once, used
-      // by both the duration report below and the seek guard further down).
-      let loadedId = null;
-      try {
-        loadedId = typeof player.getLoadedVideoId === 'function' ? await player.getLoadedVideoId() : null;
-      } catch {
-        loadedId = null;
-      }
-      const curTrack =
-        st.queue?.find((q) => q.queueItemId === st.currentQueueItemId)?.track ||
-        st.queue?.[0]?.track ||
-        null;
-      const mySource =
-        st.participants?.find((p) => sessionRef.current && p.id === sessionRef.current.participantId)?.source ||
-        myParticipant?.source ||
-        'youtube';
-      const expectedId = expectedMediaId(curTrack, mySource);
-
-      // N-02/B2: read the real duration every tick; report it to the server
-      // when it differs from the stored one, and never seek the player back
-      // when it is within 1500ms of its real end (let onEnded fire).
-      // R5: only report once the player is confirmed to be on THIS track —
-      // reporting while it still holds the previous video overwrites the new
-      // track's duration with the old one (04:04 for Instant Crush).
-      let realDurationMs = 0;
-      try {
-        realDurationMs = await player.getDuration();
-      } catch {
-        realDurationMs = 0;
-      }
-      if (realDurationMs > 0) {
-        reportRealDuration(realDurationMs, st.playback, { loadedId, expectedId });
-      }
-
-      if (st.playback.playbackState !== 'playing') {
-        setSyncMetrics((prev) => ({
-          ...prev,
-          reportedPositionMs: Math.round(actualMs),
-          expectedPositionMs: Math.round(expectedMs),
-          driftMs: Math.round(actualMs - expectedMs),
-        }));
-        return;
-      }
-
-      // B1: do NOT seek when the player is still on the previous track.
-      // After Next, loadVideoById takes a moment to swap the video; until
-      // it does, the player's position/duration belong to the OLD video and
-      // any seek here would pin the old video in place (and stop the new
-      // one from ever loading). Compare the actually-loaded media ID with
-      // the current track's ID and skip the correction until they match.
-      // (loadedId / expectedId were computed above, before the duration
-      // report, so the report and the seek share one reading.)
-      if (loadedId && expectedId && loadedId !== expectedId) {
-        // Player is still on the previous track — report the position but
-        // do not seek or count this as drift.
-        setSyncMetrics((prev) => ({
-          ...prev,
-          reportedPositionMs: Math.round(actualMs),
-          expectedPositionMs: Math.round(expectedMs),
-          driftMs: 0,
-        }));
-        return;
-      }
-
+      const started = playerHasStarted(effectiveState);
+      if (!started && effectiveState !== 'ended') return;
       const evaluation = evaluateDriftCorrection({
         expectedMs,
         actualMs,
         lastCorrectionAtMs: lastCorrectionAtRef.current,
         consecutiveModerateCount: consecutiveDriftRef.current,
-        playerDurationMs: realDurationMs > 0 ? realDurationMs : realDurationRef.current || null,
+        playerDurationMs: realDurationMs || realDurationRef.current || null,
       });
-
-      consecutiveDriftRef.current = evaluation.nextConsecutiveCount;
-
-      if (evaluation.action === 'seek') {
-        // R1 (follow-up): never seek a player that has not started this
-        // track yet. While the video is still cueing/buffering its position
-        // sits at 0 while the expected position grows, so the drift loop
-        // would seek it every ~1.5s — each seek disturbs the load and the
-        // video never starts. Report the position, but do not seek and do
-        // not count a correction. (A player whose position is advancing is
-        // 'playing' by the overrule above, so real drift still corrects.)
-        if (!playerHasStarted(effectivePlayerState)) {
-          setSyncMetrics((prev) => ({
-            ...prev,
-            reportedPositionMs: Math.round(actualMs),
-            expectedPositionMs: Math.round(expectedMs),
-            driftMs: evaluation.driftMs,
-          }));
-        } else {
-          lastCorrectionAtRef.current = Date.now();
-          await player.seek(evaluation.targetMs);
-          setSyncMetrics((prev) => ({
-            ...prev,
-            reportedPositionMs: Math.round(evaluation.targetMs),
-            expectedPositionMs: Math.round(expectedMs),
-            driftMs: evaluation.driftMs,
-            correctionCount: prev.correctionCount + 1,
-          }));
-        }
-      } else {
-        setSyncMetrics((prev) => ({
-          ...prev,
-          reportedPositionMs: Math.round(actualMs),
-          expectedPositionMs: Math.round(expectedMs),
-          driftMs: evaluation.driftMs,
-        }));
+      consecutiveDriftRef.current = playing ? evaluation.nextConsecutiveCount : 0;
+      const corrected = playing && started &&
+        evaluation.action === 'seek' && player.getCapabilities().canSeek;
+      if (corrected) {
+        lastCorrectionAtRef.current = Date.now();
+        await player.seek(evaluation.targetMs);
+        if (!isCurrent()) return;
       }
 
-      emitAck('player:status', {
+      // Show the measured position. A seek request is only confirmed on
+      // the next sample, once the player has actually moved.
+      setSyncMetrics((prev) => ({
+        ...prev,
         reportedPositionMs: Math.round(actualMs),
+        expectedPositionMs: Math.round(expectedMs),
         driftMs: evaluation.driftMs,
-      }).catch(() => {});
+        playbackSignature: effectiveState === 'playing' ? signature : null,
+        correctionCount: prev.correctionCount + Number(corrected),
+      }));
+
+      if (playing) {
+        emitAck('player:status', {
+          reportedPositionMs: Math.round(actualMs),
+          driftMs: evaluation.driftMs,
+          buffering: effectiveState !== 'playing',
+        }).catch(() => {});
+      }
+    };
+    const interval = setInterval(() => {
+      if (sampling) return;
+      sampling = true;
+      sample().catch(() => {}).finally(() => { sampling = false; });
     }, 1000);
 
-    return () => clearInterval(interval);
-  }, [roomState, audioUnlocked]);
+    return () => {
+      disposed = true;
+      clearInterval(interval);
+    };
+  }, [roomCode, audioUnlocked, mySource, reportRealDuration]);
 
   // M8: keep syncMetrics.expectedPositionMs fresh even when audio is not
   // unlocked yet (the drift loop above only runs when audioUnlocked, which
   // is why a guest's reported position went stale before tapping). The UI
   // subagent uses this for the guest's read-only progress bar.
   useEffect(() => {
-    if (!roomState) return;
+    if (!roomCode) return;
     const updateExpected = () => {
       const st = roomStateRef.current;
       if (!st?.playback) return;
@@ -1145,7 +1084,7 @@ export function RoomProvider({ children }) {
       // tapping to unlock audio. Once unlocked the drift loop owns the
       // reported position and this stays out of its way.
       setSyncMetrics((prev) =>
-        audioUnlockedRef.current
+        audioUnlockedRef.current || playerStateRef.current === 'error'
           ? { ...prev, expectedPositionMs: Math.round(expectedMs) }
           : {
               ...prev,
@@ -1157,7 +1096,7 @@ export function RoomProvider({ children }) {
     updateExpected();
     const interval = setInterval(updateExpected, 1000);
     return () => clearInterval(interval);
-  }, [roomState]);
+  }, [roomCode]);
 
   // Visibility-change reconciliation (mobile foreground recovery)
   useEffect(() => {

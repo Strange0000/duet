@@ -3,7 +3,7 @@
  */
 export function computeExpectedPositionMs(playback, estimatedServerNowMs) {
   if (!playback) return 0;
-  const durationMs = Math.max(0, playback.durationMs || 0);
+  const durationMs = playback.durationMs > 0 ? playback.durationMs : Infinity;
   const anchorPos = Math.max(0, Math.min(durationMs, playback.anchorPositionMs || 0));
 
   if (playback.playbackState !== 'playing') {
@@ -84,12 +84,19 @@ export function resolvePlaybackStatus({
   serverPlaybackState,
   participantsBuffering = false,
   driftMs = 0,
+  partnerDriftMs = 0,
+  partnerPlaybackConfirmed = true,
+  localPlaybackConfirmed = true,
   hasPartner = false,
   partnerReady = false,
   meReady = false,
   hasRoomState = true,
 }) {
   if (!hasRoomState) return 'waiting';
+
+  const inSync = localPlaybackConfirmed && partnerPlaybackConfirmed &&
+    Math.abs(driftMs) < 350 && Math.abs(partnerDriftMs) < 350 &&
+    Math.abs(driftMs - partnerDriftMs) < 350;
 
   let effective = playerState || null;
   if ((effective === 'buffering' || effective === 'paused') && positionAdvanced) {
@@ -98,9 +105,12 @@ export function resolvePlaybackStatus({
 
   if (effective === 'playing') {
     if (!hasPartner || !partnerReady || !meReady) return 'waiting';
-    return Math.abs(driftMs) < 350 ? 'in-sync' : 'syncing';
+    return inSync ? 'in-sync' : 'syncing';
   }
   if (effective === 'buffering') return 'buffering';
+  if (effective === 'cued' || effective === 'unstarted') {
+    return serverPlaybackState === 'playing' ? 'buffering' : 'paused';
+  }
   if (effective === 'paused' || effective === 'ended') return 'paused';
   // F1: the local player failed to load/play (e.g. embedding-disabled).
   // Never fall through to server truth here — the server still says
@@ -112,7 +122,7 @@ export function resolvePlaybackStatus({
   if (serverPlaybackState === 'paused') return 'paused';
   if (serverPlaybackState === 'playing') {
     if (!hasPartner || !partnerReady || !meReady) return 'waiting';
-    return Math.abs(driftMs) < 350 ? 'in-sync' : 'syncing';
+    return inSync ? 'in-sync' : 'syncing';
   }
   return 'waiting';
 }
@@ -165,6 +175,7 @@ export function shouldReapplyPlayback({
   playbackState,
 }) {
   if (!signature || signature !== lastSignature || trackKey !== lastTrackKey) return true;
+  if (livePlayerState === 'error') return false;
   if (playbackState === 'playing') {
     // Already playing, or already trying to start — leave it alone. A
     // paused/ready/idle player is the one case that needs a fresh play().
