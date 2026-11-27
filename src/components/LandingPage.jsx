@@ -179,12 +179,12 @@ export default function LandingPage({
     <div className="min-h-screen bg-zinc-950 text-white overflow-x-hidden">
       {/* ───────── NAV ───────── */}
       <header className="sticky top-0 z-40 border-b border-white/5 bg-zinc-950/80 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-7xl items-center justify-between px-5 py-3.5 sm:px-8">
-          <a href="#" className="flex items-center gap-2.5 group">
-            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-white text-zinc-950 shadow-sm transition-transform group-hover:scale-105">
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-2 px-4 py-3 sm:px-8 sm:py-3.5">
+          <a href="#" className="flex shrink-0 items-center gap-2 group sm:gap-2.5">
+            <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-white text-zinc-950 shadow-sm transition-transform group-hover:scale-105 sm:h-9 sm:w-9">
               <Radio className="h-4 w-4" />
             </span>
-            <span className="font-display text-xl font-bold tracking-tight">Duet</span>
+            <span className="font-display text-lg font-bold tracking-tight sm:text-xl">Duet</span>
           </a>
           <nav className="hidden items-center gap-7 text-sm font-medium text-zinc-400 md:flex">
             <a href="#features"   className="transition hover:text-white">Features</a>
@@ -192,7 +192,7 @@ export default function LandingPage({
             <a href="#story"      className="transition hover:text-white">Story</a>
             <a href="#faq"        className="transition hover:text-white">FAQ</a>
           </nav>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3">
             <button onClick={onOpenDemo} className="hidden rounded-full px-4 py-2 text-sm font-semibold text-zinc-400 transition hover:text-white sm:inline-flex cursor-pointer">
               Live Demo
             </button>
@@ -201,7 +201,7 @@ export default function LandingPage({
             <div className="relative" data-connect-dropdown>
               <button
                 onClick={() => setConnectOpen((v) => !v)}
-                className={`inline-flex items-center gap-2 rounded-full border px-4 py-2.5 text-sm font-semibold transition cursor-pointer ${
+                className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-2 text-xs font-semibold transition sm:gap-2 sm:px-4 sm:py-2.5 sm:text-sm cursor-pointer ${
                   connectedSource === 'youtube'
                     ? 'border-red-500/30 bg-red-500/10 text-red-400'
                     : 'border-violet-500/30 bg-violet-500/10 text-violet-300'
@@ -213,7 +213,7 @@ export default function LandingPage({
               </button>
 
               {connectOpen && (
-                <div className="absolute right-0 z-50 mt-2 w-76 overflow-hidden rounded-2xl border border-white/10 bg-zinc-900 p-2 shadow-2xl shadow-black/40 backdrop-blur-xl">
+                <div className="absolute right-0 z-50 mt-2 w-72 max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl border border-white/10 bg-zinc-900 p-2 shadow-2xl shadow-black/40 backdrop-blur-xl sm:w-76">
                   <p className="px-3 py-2 text-[11px] font-bold tracking-widest text-zinc-500 uppercase">Choose playback source</p>
 
                   {/* YouTube option */}
@@ -274,9 +274,9 @@ export default function LandingPage({
             <button
               onClick={() => onCreateRoom(connectedSource)}
               disabled={roomLoading}
-              className="inline-flex items-center gap-2 rounded-full bg-white px-5 py-2.5 text-sm font-semibold text-zinc-950 shadow-sm transition-all hover:bg-zinc-200 active:scale-[0.97] disabled:opacity-50 cursor-pointer"
+              className="inline-flex items-center gap-1.5 rounded-full bg-white px-3.5 py-2 text-xs font-semibold text-zinc-950 shadow-sm transition-all hover:bg-zinc-200 active:scale-[0.97] disabled:opacity-50 sm:gap-2 sm:px-5 sm:py-2.5 sm:text-sm cursor-pointer"
             >
-              {roomLoading ? 'Creating...' : 'Start a Room'} <ArrowRight className="h-4 w-4" />
+              {roomLoading ? 'Creating...' : 'Start a Room'} <ArrowRight className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
             </button>
           </div>
         </div>
@@ -294,7 +294,7 @@ export default function LandingPage({
           <div className="relative z-10 mx-auto max-w-6xl px-5 pt-16 pb-20 sm:px-8 sm:pt-24 sm:pb-28">
             <div className="mx-auto max-w-3xl text-center">
               {/* Animated shimmer headline */}
-              <h1 className="animate-fade-up font-display text-5xl font-extrabold tracking-[-0.04em] text-balance sm:text-7xl sm:leading-[1.05]">
+              <h1 className="animate-fade-up font-display text-4xl font-extrabold tracking-[-0.04em] text-balance sm:text-7xl sm:leading-[1.05]">
                 <span className="shimmer-text">Two phones.</span>{' '}
                 <span className="text-white">One song.</span><br />
                 <span className="text-white">Same second.</span>
