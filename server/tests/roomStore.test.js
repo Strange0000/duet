@@ -213,6 +213,35 @@ describe('RoomStore unit tests', () => {
     expect(host.room.playback.durationMs).toBe(274000);
   });
 
+  it('keeps host transport commands valid when players report different durations', () => {
+    const host = store.createRoom({ name: 'Host', source: 'youtube', initialTracks: [sampleTrack] });
+    const code = host.room.code;
+    const guest = store.joinRoom({ roomCode: code, name: 'Guest', source: 'spotify' });
+    store.play(code, host.participantId, { positionMs: 20000 });
+    const { trackVersion } = host.room.playback;
+    const { roomVersion } = host.room;
+
+    expect(store.correctTrackDuration(code, guest.participantId, { durationMs: 175000, trackVersion }).changed).toBe(false);
+    expect(host.room.playback.durationMs).toBe(sampleTrack.durationSec * 1000);
+    expect(store.correctTrackDuration(code, host.participantId, { durationMs: 274000, trackVersion }).changed).toBe(true);
+    expect(store.correctTrackDuration(code, host.participantId, { durationMs: 274000, trackVersion }).changed).toBe(false);
+    expect(store.pause(code, host.participantId, { expectedRoomVersion: roomVersion }).skipped).toBeUndefined();
+    expect(host.room.playback.playbackState).toBe('paused');
+  });
+
+  it('counts the first started queue entry once across pause and resume', () => {
+    const host = store.createRoom({ name: 'Host', initialTracks: [sampleTrack, secondTrack] });
+    const code = host.room.code;
+    expect(host.room.stats.tracksPlayed).toBe(0);
+    store.play(code, host.participantId);
+    expect(host.room.stats.tracksPlayed).toBe(1);
+    store.pause(code, host.participantId);
+    store.play(code, host.participantId);
+    expect(host.room.stats.tracksPlayed).toBe(1);
+    store.stepTrack(code, host.participantId, 1);
+    expect(host.room.stats.tracksPlayed).toBe(2);
+  });
+
   it('advances exactly once per track end, and a stale endedTrackVersion does not advance (B2)', () => {
     const host = store.createRoom({ name: 'Host', initialTracks: [sampleTrack, secondTrack] });
     const guest = store.joinRoom({ roomCode: host.room.code, name: 'Guest' });
@@ -230,8 +259,12 @@ describe('RoomStore unit tests', () => {
     expect(stale.autoAdvanced).toBe(false);
     expect(host.room.playback.trackId).toBe('trk-2');
 
-    // The new version ending advances again (wraps to the first track).
-    const r2 = store.updatePlayerStatus(host.room.code, guest.participantId, { endedTrackVersion: tv2 });
+    // A guest on a shorter provider recording can finish before the host.
+    const guestEnd = store.updatePlayerStatus(host.room.code, guest.participantId, { endedTrackVersion: tv2 });
+    expect(guestEnd.autoAdvanced).toBe(false);
+    expect(host.room.playback.trackId).toBe('trk-2');
+
+    const r2 = store.updatePlayerStatus(host.room.code, host.participantId, { endedTrackVersion: tv2 });
     expect(r2.autoAdvanced).toBe(true);
     expect(host.room.playback.trackId).toBe('trk-1');
   });

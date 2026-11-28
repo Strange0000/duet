@@ -212,6 +212,7 @@ export class RoomStore {
         roomVersion: 1,
       },
       chat: [],
+      lastPlayedTrackVersion: 0,
       stats: {
         // N-32: nothing has played yet when the room is created.
         tracksPlayed: 0,
@@ -577,13 +578,18 @@ export class RoomStore {
     if (trackVersion !== room.playback.trackVersion) {
       return { error: 'Track has changed; duration no longer applies', code: 'VERSION_MISMATCH' };
     }
+    // The host's source defines the room timeline. Other providers can
+    // have different edits of the same recording.
+    if (p.role !== 'host' || Math.round(durationMs) === room.playback.durationMs) {
+      return { room, changed: false };
+    }
     room.playback.durationMs = Math.round(durationMs);
     const currentItem = room.queue.find((q) => q.queueItemId === room.currentQueueItemId);
     if (currentItem) {
       currentItem.track.durationSec = durationMs / 1000;
     }
-    this._bumpVersion(room);
-    return { room };
+    // Duration metadata must not invalidate a playback command already in flight.
+    return { room, changed: true };
   }
 
   transferHost(roomCode, currentHostId, targetParticipantId, commandId, expectedRoomVersion) {
@@ -639,7 +645,8 @@ export class RoomStore {
     if (
       typeof status.endedTrackVersion === 'number' &&
       status.endedTrackVersion === room.playback.trackVersion &&
-      room.playback.playbackState === 'playing'
+      room.playback.playbackState === 'playing' &&
+      p.role === 'host'
     ) {
       // Single-advance protection: advance only once for this trackVersion
       const adv = this._advanceTrackInternal(room, 1);
@@ -669,6 +676,7 @@ export class RoomStore {
     room.playback.anchorPositionMs = anchorPos;
     room.playback.anchorServerTimeMs = effectiveAt;
     room.playback.effectiveAtServerMs = effectiveAt;
+    this._countPlayedTrack(room);
 
     this._bumpVersion(room, commandId);
     return { room, scheduled: scheduleLeadMs > 0 };
@@ -717,6 +725,13 @@ export class RoomStore {
     return { room };
   }
 
+  _countPlayedTrack(room) {
+    const { trackVersion, trackId } = room.playback;
+    if (!trackId || room.lastPlayedTrackVersion === trackVersion) return;
+    room.lastPlayedTrackVersion = trackVersion;
+    room.stats.tracksPlayed += 1;
+  }
+
   _selectQueueItemInternal(room, queueItem, autoPlay = true) {
     const now = this._now();
     room.currentQueueItemId = queueItem.queueItemId;
@@ -730,7 +745,7 @@ export class RoomStore {
     room.playback.anchorServerTimeMs = now;
     room.playback.effectiveAtServerMs = now;
     room.playback.playbackState = autoPlay ? 'playing' : 'paused';
-    room.stats.tracksPlayed += 1;
+    if (autoPlay) this._countPlayedTrack(room);
     for (const p of room.participants.values()) {
       p.reportedPositionMs = 0;
       p.driftMs = 0;
