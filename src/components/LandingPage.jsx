@@ -48,7 +48,7 @@ const FEATURES = [
   {
     icon: Users,
     title: 'Pick Your Source',
-    body: 'Each person chooses YouTube (free) or Spotify (Premium). Duet resolves the same track on both.',
+    body: 'Each person chooses YouTube (free). Spotify is available but requires your own developer app and a Premium account.',
     gradient: 'from-emerald-500 to-cyan-500',
   },
   {
@@ -63,7 +63,7 @@ const FEATURES = [
 const FAQS = [
   {
     q: 'Does my friend need Spotify Premium?',
-    a: 'No. You can listen on Spotify Premium while your friend picks YouTube for free in the same room.',
+    a: 'No — your friend can use YouTube for free. If either person wants Spotify, they need their own Spotify developer app (Client ID) and a Premium account. YouTube works for everyone with no setup.',
   },
   {
     q: 'Does it work on iPhone and Android?',
@@ -398,8 +398,9 @@ export default function LandingPage({
 
               <p className="animate-fade-up-d1 mx-auto mt-5 max-w-xl text-base leading-relaxed text-zinc-400 sm:text-lg">
                 Listen together in one room. Each person picks{' '}
-                <span className="font-semibold text-white">YouTube</span> or{' '}
-                <span className="font-semibold text-white">Spotify</span>. The host
+                <span className="font-semibold text-white">YouTube</span> (free) or{' '}
+                <span className="font-semibold text-white">Spotify</span>{' '}
+                <span className="text-zinc-500">(requires your own developer app + Premium)</span>. The host
                 presses play—both phones follow at the exact same second.
               </p>
 

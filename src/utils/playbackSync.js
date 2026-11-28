@@ -118,7 +118,10 @@ export function resolvePlaybackStatus({
   const partnerInSync = partnerDriftMs == null || Math.abs(partnerDriftMs) < 1500;
 
   if (effective === 'playing') {
-    if (!hasPartner || !partnerReady || !meReady) return 'waiting';
+    // E-14/I-07: when playing solo (no partner yet), show 'playing' instead
+    // of 'waiting' — the music IS playing, just alone.
+    if (!hasPartner) return 'playing';
+    if (!partnerReady || !meReady) return 'waiting';
     return Math.abs(driftMs) < 350 && partnerInSync ? 'in-sync' : 'syncing';
   }
   if (effective === 'buffering') return 'buffering';
@@ -132,7 +135,9 @@ export function resolvePlaybackStatus({
   if (participantsBuffering) return 'buffering';
   if (serverPlaybackState === 'paused') return 'paused';
   if (serverPlaybackState === 'playing') {
-    if (!hasPartner || !partnerReady || !meReady) return 'waiting';
+    // E-14/I-07: solo host — show 'playing' not 'waiting'.
+    if (!hasPartner) return 'playing';
+    if (!partnerReady || !meReady) return 'waiting';
     return Math.abs(driftMs) < 350 && partnerInSync ? 'in-sync' : 'syncing';
   }
   return 'waiting';

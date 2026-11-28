@@ -311,7 +311,11 @@ export async function searchItunesCatalog(query, limit = 8) {
       title: item.trackName,
       artist: item.artistName,
       album: item.collectionName || 'Single',
-      durationSec: Math.max(15, Math.round((item.trackTimeMillis || 210000) / 1000)),
+      // E-17/I-09: when iTunes has no trackTimeMillis, use 0 instead of a
+      // fabricated 3:30 fallback — the UI shows "–:––" and the server won't
+      // auto-advance at a wrong time. The real duration is reported by the
+      // player once the YouTube video loads.
+      durationSec: item.trackTimeMillis ? Math.max(15, Math.round(item.trackTimeMillis / 1000)) : 0,
       coverImage: item.artworkUrl100
         ? item.artworkUrl100.replace('100x100bb', '600x600bb')
         : null,
