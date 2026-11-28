@@ -1,8 +1,6 @@
 .room-mobile-nav,
-.room-player-heading,
-.room-activity-heading,
-.room-mobile-themes,
-.room-cover {
+.room-theme-options,
+.room-sync-rtt {
   display: none;
 }
 
@@ -215,6 +213,93 @@
   font-size: 0.625rem;
 }
 
+.room-theme-trigger {
+  display: inline-flex;
+  min-height: 46px;
+  flex: none;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.375rem 0.625rem;
+  border: 1px solid color-mix(in srgb, var(--room-selection) 60%, transparent);
+  border-radius: 0.75rem;
+  background: color-mix(in srgb, var(--room-accent) 22%, #19151e);
+  color: var(--room-selection);
+  text-align: left;
+  cursor: pointer;
+}
+
+.room-theme-trigger > span {
+  display: grid;
+  color: var(--room-muted);
+  font-size: 0.6875rem;
+  line-height: 1.15;
+}
+
+.room-theme-trigger strong {
+  margin-top: 0.125rem;
+  color: var(--room-ink);
+  font-size: 0.8125rem;
+  font-weight: 750;
+}
+
+.room-theme-trigger[aria-expanded="true"] > svg:last-child {
+  transform: rotate(180deg);
+}
+
+.room-theme-options:not([hidden]) {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin-bottom: 0.875rem;
+}
+
+.room-theme-options button {
+  display: flex;
+  min-width: 0;
+  min-height: 48px;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.375rem 0.5rem;
+  border: 1px solid var(--room-edge);
+  border-radius: 0.75rem;
+  background: var(--room-surface);
+  color: var(--room-ink);
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.room-theme-options > p {
+  grid-column: 1 / -1;
+  color: var(--room-muted);
+  font-size: 0.8125rem;
+}
+
+.room-theme-options button:disabled {
+  cursor: default;
+}
+
+.room-theme-options button[aria-pressed="true"] {
+  border-color: var(--room-selection);
+}
+
+.room-theme-options button > svg {
+  flex: none;
+  margin-left: auto;
+  color: var(--room-selection);
+}
+
+.room-theme-swatch {
+  width: 32px;
+  height: 32px;
+  flex: none;
+  border-radius: 0.375rem;
+  background-position: center;
+  background-size: cover;
+}
+
+
 @media (max-width: 767px), (max-width: 1023px) and (max-height: 500px) and (pointer: coarse) {
   .duet-room {
     --room-top: calc(64px + env(safe-area-inset-top, 0px));
@@ -299,8 +384,6 @@
 
   .room-brand-icon,
   .room-demo-badge,
-  .room-desktop-themes,
-  .room-desktop-sync,
   .room-desktop-tabs {
     display: none;
   }
@@ -466,92 +549,6 @@
     position: absolute;
     content: '';
     inset: -9px -5px -17px;
-  }
-
-  .room-theme-trigger {
-    display: inline-flex;
-    min-height: 46px;
-    flex: none;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.375rem 0.625rem;
-    border: 1px solid color-mix(in srgb, var(--room-selection) 60%, transparent);
-    border-radius: 0.75rem;
-    background: color-mix(in srgb, var(--room-accent) 22%, #19151e);
-    color: var(--room-selection);
-    text-align: left;
-    cursor: pointer;
-  }
-
-  .room-theme-trigger > span {
-    display: grid;
-    color: var(--room-muted);
-    font-size: 0.6875rem;
-    line-height: 1.15;
-  }
-
-  .room-theme-trigger strong {
-    margin-top: 0.125rem;
-    color: var(--room-ink);
-    font-size: 0.8125rem;
-    font-weight: 750;
-  }
-
-  .room-theme-trigger[aria-expanded="true"] > svg:last-child {
-    transform: rotate(180deg);
-  }
-
-  .room-mobile-themes:not([hidden]) {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.5rem;
-    margin-bottom: 0.875rem;
-  }
-
-  .room-mobile-themes button {
-    display: flex;
-    min-width: 0;
-    min-height: 48px;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.375rem 0.5rem;
-    border: 1px solid var(--room-edge);
-    border-radius: 0.75rem;
-    background: var(--room-surface);
-    color: var(--room-ink);
-    font-size: 0.75rem;
-    font-weight: 700;
-    text-align: left;
-    cursor: pointer;
-  }
-
-  .room-mobile-themes > p {
-    grid-column: 1 / -1;
-    color: var(--room-muted);
-    font-size: 0.8125rem;
-  }
-
-  .room-mobile-themes button:disabled {
-    cursor: default;
-  }
-
-  .room-mobile-themes button[aria-pressed="true"] {
-    border-color: var(--room-selection);
-  }
-
-  .room-mobile-themes button > svg {
-    flex: none;
-    margin-left: auto;
-    color: var(--room-selection);
-  }
-
-  .room-theme-swatch {
-    width: 32px;
-    height: 32px;
-    flex: none;
-    border-radius: 0.375rem;
-    background-position: center;
-    background-size: cover;
   }
 
   .room-status-dot {

@@ -46,7 +46,7 @@ function PWAInstallBanner() {
   };
 
   return (
-    <div className="fixed bottom-4 left-4 right-4 z-50 mx-auto max-w-md animate-fade-up rounded-2xl border border-white/10 bg-zinc-900/95 p-4 shadow-2xl backdrop-blur-xl sm:left-auto sm:right-6 sm:w-96">
+    <div className="duet-install-banner fixed bottom-4 left-4 right-4 z-50 mx-auto max-w-md animate-fade-up rounded-2xl border border-white/10 bg-zinc-900/95 p-4 shadow-2xl backdrop-blur-xl sm:left-auto sm:right-6 sm:w-96">
       <div className="flex items-start gap-3">
         <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-violet-600 text-white">
           <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
