@@ -467,12 +467,26 @@ export class RoomStore {
         const current = this.getRoom(room.code);
         if (!current) return;
         const host = current.participants.get(participantId);
-        if (host && !host.connected && current.playback.playbackState === 'playing') {
-          const now = this._now();
-          current.playback.anchorPositionMs = this._computeCurrentPositionMs(current, now);
-          current.playback.anchorServerTimeMs = now;
-          current.playback.effectiveAtServerMs = now;
-          current.playback.playbackState = 'paused';
+        if (host && !host.connected) {
+          // E-01/I-02: auto-promote the remaining guest to host when the host
+          // has been gone past the grace period. This prevents the guest from
+          // being stuck in a dead room with no way to take over.
+          const guest = Array.from(current.participants.values()).find(
+            (pp) => pp.role === 'guest' && pp.connected
+          );
+          if (guest) {
+            host.role = 'guest';
+            guest.role = 'host';
+          }
+
+          // Pause playback if it was playing
+          if (current.playback.playbackState === 'playing') {
+            const now = this._now();
+            current.playback.anchorPositionMs = this._computeCurrentPositionMs(current, now);
+            current.playback.anchorServerTimeMs = now;
+            current.playback.effectiveAtServerMs = now;
+            current.playback.playbackState = 'paused';
+          }
           this._bumpVersion(current);
           if (onHostGraceExpired) onHostGraceExpired(current);
         }

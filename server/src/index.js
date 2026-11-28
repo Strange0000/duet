@@ -30,7 +30,9 @@ export function createApp({ store: customStore } = {}) {
   app.use(
     cors({
       origin(origin, cb) {
-        if (!origin || env.ALLOWED_ORIGINS.includes(origin) || env.ALLOWED_ORIGINS.includes('*')) {
+        // E-05/I-06: use the centralized allow-list check that also covers
+        // Netlify branch deploy previews (e.g. some-feature--duet-music.netlify.app).
+        if (env.isAllowedOrigin(origin)) {
           return cb(null, true);
         }
         return cb(new Error('Origin not allowed by CORS'));
@@ -163,7 +165,11 @@ export function createApp({ store: customStore } = {}) {
 
   const io = new SocketIOServer(server, {
     cors: {
-      origin: env.ALLOWED_ORIGINS.includes('*') ? '*' : env.ALLOWED_ORIGINS,
+      // E-05/I-06: use the same centralized origin check for Socket.IO.
+      origin: (origin, cb) => {
+        if (env.isAllowedOrigin(origin)) return cb(null, true);
+        return cb(new Error('Origin not allowed by CORS'));
+      },
       methods: ['GET', 'POST'],
       credentials: true,
     },

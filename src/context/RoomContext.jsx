@@ -977,6 +977,19 @@ export function RoomProvider({ children }) {
     socket.on('reaction:burst', onReactionBurst);
     socket.on('room:closed', onRoomClosed);
 
+    // E-01: listen for the host:promoted event from the server so the guest
+    // learns they became host after the original host disconnected.
+    const onHostPromoted = ({ reason }) => {
+      if (sessionRef.current) {
+        const updated = { ...sessionRef.current, role: 'host' };
+        setSession(updated);
+        saveSession(updated);
+      }
+      // Surface the promotion as a room-level notification the UI can show.
+      setRoomError(reason || 'You are now the host.');
+    };
+    socket.on('host:promoted', onHostPromoted);
+
     return () => {
       socket.off('connect', onConnect);
       socket.off('disconnect', onDisconnect);
@@ -992,6 +1005,7 @@ export function RoomProvider({ children }) {
       socket.off('chat:typing', onPartnerTyping);
       socket.off('reaction:burst', onReactionBurst);
       socket.off('room:closed', onRoomClosed);
+      socket.off('host:promoted', onHostPromoted);
     };
   }, [
     applyPlaybackToPlayer,
@@ -1128,15 +1142,15 @@ export function RoomProvider({ children }) {
       // (loadedId / expectedId were computed above, before the duration
       // report, so the report and the seek share one reading.)
       if (loadedId && expectedId && loadedId !== expectedId) {
-        // Player is still on the previous track — report the position but
-        // do not seek. Round 4 (c): report the REAL drift instead of 0 —
-        // the old 0 masked a genuine position gap, so the pill could say
-        // "In sync" while the tabs were seconds apart.
+        // E-25: report position as 0 (not the old video's position) so the
+        // UI progress bar doesn't show the previous track's position while
+        // the new track is loading. The old code reported `actualMs` which
+        // was the stale position from the previous video.
         setSyncMetrics((prev) => ({
           ...prev,
-          reportedPositionMs: Math.round(actualMs),
+          reportedPositionMs: 0,
           expectedPositionMs: Math.round(expectedMs),
-          driftMs: Math.round(actualMs - expectedMs),
+          driftMs: Math.round(-expectedMs),
         }));
         return;
       }
@@ -1214,14 +1228,17 @@ export function RoomProvider({ children }) {
       // guest rejoining a room paused at 00:55 must see 00:55 before
       // tapping to unlock audio. Once unlocked the drift loop owns the
       // reported position and this stays out of its way.
-      // Round 4 (b): never mirror into the reported position while the
-      // player is errored — the room clock keeps advancing while the
-      // video is unavailable, so mirroring made the guest's progress
-      // clock advance (00:25, 00:33) with no actual playback. The
-      // reported position then stays at the last real player position
-      // (frozen), which is honest.
+      // Round 4 (b) + E-22: never mirror into the reported position while
+      // the player is errored OR while nothing is actually playing. The
+      // room clock keeps advancing while the video is unavailable or
+      // before playback starts, so mirroring made the progress clock
+      // advance (00:25, 00:33…) with no actual playback. The reported
+      // position then stays at the last real player position (frozen),
+      // which is honest.
       const mirrorReported =
-        !audioUnlockedRef.current && playerStateRef.current !== 'error';
+        !audioUnlockedRef.current &&
+        playerStateRef.current !== 'error' &&
+        (st.playback.playbackState === 'playing' || st.playback.playbackState === 'buffering');
       setSyncMetrics((prev) =>
         mirrorReported
           ? {
@@ -1249,7 +1266,29 @@ export function RoomProvider({ children }) {
       }
     };
     document.addEventListener('visibilitychange', onVisibility);
-    return () => document.removeEventListener('visibilitychange', onVisibility);
+
+    // I-04: send a leave signal when the tab is closing. The browser fires
+    // `pagehide` (preferred for bfcache, mobile Safari) or `beforeunload`
+    // (desktop fallback). Socket.IO may send a close frame, but neither
+    // guarantees the server learns the person is gone quickly. This handler
+    // gives the server the best possible advance notice.
+    const onPageHide = () => {
+      const socket = getSocket();
+      if (socket?.connected && sessionRef.current) {
+        // Use the low-level `send` path — the tab is tearing down, so we
+        // cannot await an ack. `volatile` ensures Socket.IO does not queue
+        // the event when the transport is already gone.
+        socket.volatile.emit('room:tab-close', {});
+      }
+    };
+    window.addEventListener('pagehide', onPageHide);
+    window.addEventListener('beforeunload', onPageHide);
+
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pagehide', onPageHide);
+      window.removeEventListener('beforeunload', onPageHide);
+    };
   }, [runClockSync, refreshRoomStateFromServer]);
 
   const createRoom = useCallback(async ({ name = 'Host', source = 'youtube' } = {}) => {
@@ -1541,8 +1580,15 @@ export function RoomProvider({ children }) {
 
   useEffect(() => {
     if (!currentTrack) return;
+    // E-06/I-12: prefer the server's authoritative durationMs over the
+    // seed-track's durationSec. During a track change the seed data may
+    // still carry the previous track's length for a tick, causing the
+    // lock-screen scrubber to flicker to the wrong duration before the
+    // new value arrives.
     const durSec =
-      currentTrack.durationSec || Math.round((roomState?.playback?.durationMs || 0) / 1000) || 1;
+      Math.round((roomState?.playback?.durationMs || 0) / 1000) ||
+      currentTrack.durationSec ||
+      1;
     const posSec = Math.round((syncMetrics.reportedPositionMs || 0) / 1000);
     backgroundAudio.updatePosition(posSec, durSec);
   }, [currentTrack, roomState?.playback?.durationMs, syncMetrics.reportedPositionMs]);
