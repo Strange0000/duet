@@ -493,6 +493,14 @@ export function RoomProvider({ children }) {
         realDurationRef.current = 0;
         lastReportedDurationRef.current = 0;
         setPlayerError(null);
+        // E-25: immediately reset sync metrics so scrubber and clock show 00:00 (expectedMs)
+        // on track switch without lingering on the previous track's position.
+        setSyncMetrics((prev) => ({
+          ...prev,
+          reportedPositionMs: Math.round(expectedMs),
+          expectedPositionMs: Math.round(expectedMs),
+          driftMs: 0,
+        }));
         // B1: pass shouldPlay so YouTube uses loadVideoById (loads AND plays)
         // instead of cueVideoById (loads paused, losing the immediate play()).
         await player.loadTrack(track, expectedMs, playback.playbackState === 'playing');
@@ -850,6 +858,14 @@ export function RoomProvider({ children }) {
       // state; the effect below (which reads the track from the latest
       // roomState, after queue:updated lands) is the single place that
       // drives the player.
+      if (playback?.trackVersion !== roomStateRef.current?.playback?.trackVersion) {
+        setSyncMetrics((prev) => ({
+          ...prev,
+          reportedPositionMs: 0,
+          expectedPositionMs: 0,
+          driftMs: 0,
+        }));
+      }
       setRoomState((prev) => (prev ? { ...prev, playback } : prev));
     };
 
@@ -1125,16 +1141,6 @@ export function RoomProvider({ children }) {
         });
       }
 
-      if (st.playback.playbackState !== 'playing') {
-        setSyncMetrics((prev) => ({
-          ...prev,
-          reportedPositionMs: Math.round(actualMs),
-          expectedPositionMs: Math.round(expectedMs),
-          driftMs: Math.round(actualMs - expectedMs),
-        }));
-        return;
-      }
-
       // B1: do NOT seek when the player is still on the previous track.
       // After Next, loadVideoById takes a moment to swap the video; until
       // it does, the player's position/duration belong to the OLD video and
@@ -1146,13 +1152,22 @@ export function RoomProvider({ children }) {
       if (loadedId && expectedId && loadedId !== expectedId) {
         // E-25: report position as 0 (not the old video's position) so the
         // UI progress bar doesn't show the previous track's position while
-        // the new track is loading. The old code reported `actualMs` which
-        // was the stale position from the previous video.
+        // the new track is loading.
         setSyncMetrics((prev) => ({
           ...prev,
-          reportedPositionMs: 0,
+          reportedPositionMs: Math.round(expectedMs),
           expectedPositionMs: Math.round(expectedMs),
-          driftMs: Math.round(-expectedMs),
+          driftMs: 0,
+        }));
+        return;
+      }
+
+      if (st.playback.playbackState !== 'playing') {
+        setSyncMetrics((prev) => ({
+          ...prev,
+          reportedPositionMs: Math.round(actualMs),
+          expectedPositionMs: Math.round(expectedMs),
+          driftMs: Math.round(actualMs - expectedMs),
         }));
         return;
       }
@@ -1281,6 +1296,11 @@ export function RoomProvider({ children }) {
         // cannot await an ack. `volatile` ensures Socket.IO does not queue
         // the event when the transport is already gone.
         socket.volatile.emit('room:tab-close', {});
+        try {
+          socket.disconnect();
+        } catch {
+          // ignore
+        }
       }
     };
     window.addEventListener('pagehide', onPageHide);

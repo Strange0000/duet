@@ -41,9 +41,18 @@ export const env = {
     // Netlify deploy previews: <deploy-id>--duet-music.netlify.app
     // Netlify branch deploys:  <branch>--duet-music.netlify.app
     // Netlify deploy permalinks: deploy-preview-<n>--duet-music.netlify.app
+    // Netlify production: duet-music.netlify.app
     try {
       const url = new URL(origin);
-      if (url.hostname.endsWith('--duet-music.netlify.app')) return true;
+      if (
+        url.hostname === 'duet-music.netlify.app' ||
+        url.hostname.endsWith('--duet-music.netlify.app') ||
+        (url.hostname.endsWith('.netlify.app') && url.hostname.includes('duet')) ||
+        url.hostname === 'localhost' ||
+        url.hostname === '127.0.0.1'
+      ) {
+        return true;
+      }
     } catch {
       // Not a URL — reject
     }

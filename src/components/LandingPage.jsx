@@ -48,7 +48,7 @@ const FEATURES = [
   {
     icon: Users,
     title: 'Pick Your Source',
-    body: 'Each person chooses YouTube (free). Spotify is available but requires your own developer app and a Premium account.',
+    body: 'Each person chooses YouTube (free). Spotify is available but requires your own developer app (Client ID) and a Premium account.',
     gradient: 'from-emerald-500 to-cyan-500',
   },
   {
@@ -84,7 +84,7 @@ const TRENDING_SONGS = [
   { img: '/cover-instant.jpg', title: 'Instant Crush', artist: 'Daft Punk', hot: false },
   { img: '/cover-resonance.jpg', title: 'Resonance', artist: 'HOME', hot: true },
   { img: '/cover-synth.jpg', title: 'Blinding Lights', artist: 'The Weeknd', hot: true },
-  { img: '/cover-soul.jpg', title: 'Redbone', artist: 'Childish Gambino', hot: false },
+  { img: 'https://i.ytimg.com/vi/Kp7eSUU9oy8/hqdefault.jpg', title: 'Redbone', artist: 'Childish Gambino', hot: false },
   { img: '/cover-indie.jpg', title: 'The Less I Know The Better', artist: 'Tame Impala', hot: true },
   { img: '/cover-synth.jpg', title: 'Starboy', artist: 'The Weeknd', hot: false },
   { img: '/cover-instant.jpg', title: 'After Dark', artist: 'Mr.Kitty', hot: true },

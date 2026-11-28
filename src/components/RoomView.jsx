@@ -582,8 +582,17 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
       setDemoTime(0);
       return;
     }
+    // E-25: immediately snap progress display to 00:00 when clicking Next/Prev
+    setScrubSec(0);
+    scrubSecRef.current = 0;
     await sendCommand(dir > 0 ? 'player:next' : 'player:previous', {});
   };
+
+  // Clear any optimistic step/scrub once the new track or version takes over
+  useEffect(() => {
+    setScrubSec(null);
+    scrubSecRef.current = null;
+  }, [currentTrack?.id, roomState?.playback?.trackVersion]);
 
   // Paste-a-YouTube-link: extract the video ID from a pasted URL and add
   // it directly (fetching the title from YouTube's public oEmbed endpoint).

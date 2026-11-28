@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import request from 'supertest';
 import { io as ioc } from 'socket.io-client';
 import { createApp } from '../src/index.js';
+import { env } from '../src/config/env.js';
 
 function emitAck(socket, event, payload = {}) {
   return new Promise((resolve) => {
@@ -51,12 +52,18 @@ describe('Duet Backend HTTP & Socket.IO Integration', () => {
   });
 
   it('GET /api/youtube/resolve reports configured:false with no API key (N-01)', async () => {
-    const res = await request(app).get('/api/youtube/resolve?title=Midnight%20City&artist=M83');
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ item: null, configured: false });
+    const origKey = env.YOUTUBE_API_KEY;
+    try {
+      env.YOUTUBE_API_KEY = '';
+      const res = await request(app).get('/api/youtube/resolve?title=Midnight%20City&artist=M83');
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ item: null, configured: false });
 
-    const missing = await request(app).get('/api/youtube/resolve');
-    expect(missing.status).toBe(400);
+      const missing = await request(app).get('/api/youtube/resolve');
+      expect(missing.status).toBe(400);
+    } finally {
+      env.YOUTUBE_API_KEY = origKey;
+    }
   });
 
   it('player:duration corrects an unknown duration; wrong version/range rejected (N-02)', async () => {
