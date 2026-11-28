@@ -234,18 +234,38 @@ export async function getValidSpotifyToken() {
   return null;
 }
 
-export async function resolveSpotifyUri(track, token) {
-  if (track?.spotifyUri && /^spotify:track:[A-Za-z0-9]+$/.test(track.spotifyUri)) {
-    return track.spotifyUri;
-  }
-  const q = `${track?.title || ''} ${track?.artist || ''}`.trim();
-  if (!q || !token) return null;
+function normalizeRecordingName(value = '') {
+  return value
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/\p{Mark}/gu, '')
+    .replace(/\s*[[(](?:(?:official\s+)?(?:music\s+)?video|official audio|lyrics?|visualizer)[\])]/gi, '')
+    .replace(/\bvevo$|\s*-\s*topic$/gi, '')
+    .replace(/[^\p{Letter}\p{Number}]+/gu, ' ')
+    .trim();
+}
 
+export async function resolveSpotifyUri(track, token) {
+  const spotifyTrackUri = /^spotify:track:[A-Za-z0-9]+$/;
+  if (spotifyTrackUri.test(track?.spotifyUri || '')) return track.spotifyUri;
+
+  const title = normalizeRecordingName(track?.title);
+  const artist = normalizeRecordingName(track?.artist);
+  if (!title || !artist || !token) return null;
+
+  const q = `${track.title} ${track.artist}`.trim();
   const res = await fetch(
-    `https://api.spotify.com/v1/search?q=${encodeURIComponent(q)}&type=track&limit=1`,
+    `https://api.spotify.com/v1/search?q=${encodeURIComponent(q)}&type=track&limit=10`,
     { headers: { Authorization: `Bearer ${token}` } }
   );
   if (!res.ok) return null;
   const data = await res.json();
-  return data?.tracks?.items?.[0]?.uri || null;
+  const match = data?.tracks?.items?.find((item) => {
+    const name = normalizeRecordingName(item.name);
+    const artistMatches = item.artists?.some(({ name }) => normalizeRecordingName(name) === artist);
+    return artistMatches && (title === name || title === `${artist} ${name}`)
+      && item.is_playable !== false
+      && spotifyTrackUri.test(item.uri || '');
+  });
+  return match?.uri || null;
 }

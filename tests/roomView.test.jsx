@@ -146,7 +146,7 @@ describe('RoomView renders a real room', () => {
       renderSource(source);
       expect(container.querySelector('.room-video')).toBeNull();
       expect(ctx.initPlayerForSource).toHaveBeenLastCalledWith(source, null);
-      expect(container.textContent).toContain('Audio Only plays synced test tones.');
+      expect(container.textContent).not.toContain('Audio Only plays synced test tones.');
 
       renderSource('youtube');
       expect(container.querySelector('.room-video')).not.toBeNull();

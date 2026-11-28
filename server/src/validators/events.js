@@ -22,6 +22,7 @@ export const trackSchema = z.object({
   accentColor: z.string().max(32).optional(),
   secondaryColor: z.string().max(32).optional(),
   youtubeId: z.string().max(64).nullable().optional(),
+  spotifyUri: z.string().max(64).regex(/^spotify:track:[A-Za-z0-9]+$/).nullable().optional(),
   localFixtureId: z.string().max(64).nullable().optional(),
   sourceAttribution: z.string().max(120).optional(),
   attributionUrl: z.string().max(500).optional(),

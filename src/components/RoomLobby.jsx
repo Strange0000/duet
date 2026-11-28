@@ -3,9 +3,9 @@ import { Copy, Link2, UserRound } from 'lucide-react';
 
 const SOURCE_LABELS = {
   youtube: 'YouTube',
-  audio: 'Audio Only',
-  local: 'Audio Only',
-  spotify: 'Spotify',
+  audio: 'Audio Only (Spotify)',
+  local: 'Sync test',
+  spotify: 'Audio Only (Spotify)',
 };
 
 export default function RoomLobby({

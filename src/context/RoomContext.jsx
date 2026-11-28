@@ -80,8 +80,8 @@ function clearSession() {
 // guard and for deciding whether a real duration is safe to report (R5).
 function expectedMediaId(track, source) {
   if (!track) return null;
-  if (source === 'spotify') return track.spotifyUri || null;
-  if (source === 'audio' || source === 'local') return track.id || null;
+  if (source === 'spotify' || source === 'audio') return track.spotifyUri || null;
+  if (source === 'local') return track.id || null;
   return track.youtubeId || null;
 }
 
@@ -508,7 +508,8 @@ export function RoomProvider({ children }) {
         }));
         // B1: pass shouldPlay so YouTube uses loadVideoById (loads AND plays)
         // instead of cueVideoById (loads paused, losing the immediate play()).
-        const shouldPlay = playback.playbackState === 'playing' && (!isLocalAudio || audioUnlockedRef.current);
+        const requiresUnlock = isLocalAudio || player instanceof SpotifyPlayer;
+        const shouldPlay = playback.playbackState === 'playing' && (!requiresUnlock || audioUnlockedRef.current);
         const trackToLoad = isLocalAudio && playback.durationMs > 0
           ? { ...track, durationSec: playback.durationMs / 1000 }
           : track;
@@ -518,7 +519,9 @@ export function RoomProvider({ children }) {
         // returns the PREVIOUS track's length and would corrupt the new
         // track's duration server-side. The 1s drift loop reports it once
         // the player is confirmed to be on the new track.
-        if (shouldPlay && playerRef.current === player) armStallWatchdog(expectedMs);
+        if (shouldPlay && await player.getState() !== 'error' && playerRef.current === player) {
+          armStallWatchdog(expectedMs);
+        }
         // B1 (follow-up): loadVideoById is asynchronous — the new video has
         // NOT finished loading when loadTrack returns. The seek/play sync
         // below would therefore operate on the OLD video still loaded in the
@@ -547,7 +550,7 @@ export function RoomProvider({ children }) {
             if (playerRef.current !== player) return;
             await player.seek(playback.anchorPositionMs || 0);
             await player.play();
-            armStallWatchdog(playback.anchorPositionMs || 0);
+            if (await player.getState() !== 'error') armStallWatchdog(playback.anchorPositionMs || 0);
           }, delayMs);
         } else {
           const currentPos = await player.getPosition();
@@ -556,7 +559,7 @@ export function RoomProvider({ children }) {
           }
           await player.play();
           // R1: the first Play after a cue is the stall case — watch it.
-          armStallWatchdog(expectedMs);
+          if (await player.getState() !== 'error') armStallWatchdog(expectedMs);
         }
       } else {
         await player.pause();
@@ -689,7 +692,7 @@ export function RoomProvider({ children }) {
 
       const adapter = wantsYouTube
         ? new YouTubePlayer(callbacks)
-        : source === 'spotify'
+        : source === 'spotify' || source === 'audio'
           ? new SpotifyPlayer(callbacks)
           : new LocalAudioPlayer(callbacks);
 
@@ -700,7 +703,7 @@ export function RoomProvider({ children }) {
           return;
         }
         playerRef.current = adapter;
-        if (adapter instanceof LocalAudioPlayer && adapter.needsAudioGesture()) {
+        if (adapter instanceof SpotifyPlayer || (adapter instanceof LocalAudioPlayer && adapter.needsAudioGesture())) {
           audioUnlockedRef.current = false;
           setAudioUnlocked(false);
         }
@@ -1451,7 +1454,10 @@ export function RoomProvider({ children }) {
         return;
       }
     } else {
-      await backgroundAudio.unlock();
+      await Promise.all([
+        player instanceof SpotifyPlayer ? player.unlockAudio() : undefined,
+        backgroundAudio.unlock(),
+      ]);
     }
     await emitAck('player:ready', { ready: true }).catch(() => {});
     const st = roomStateRef.current;

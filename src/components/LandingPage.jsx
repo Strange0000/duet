@@ -169,7 +169,7 @@ export default function LandingPage({
   const [openFaq, setOpenFaq] = useState(0);
   const [connectOpen, setConnectOpen] = useState(false);
   const [spotifyModalOpen, setSpotifyModalOpen] = useState(false);
-  const [connectedSource, setConnectedSource] = useState('youtube'); // 'youtube' | 'audio' | 'spotify'
+  const [connectedSource, setConnectedSource] = useState(() => getStoredSpotifyAuth()?.accessToken ? 'spotify' : 'youtube');
   const [spotifyAuth, setSpotifyAuth] = useState(() => getStoredSpotifyAuth());
   const [trendingSongs, setTrendingSongs] = useState(TRENDING_SONGS);
   const trendingRef = useRef(null);
@@ -282,7 +282,7 @@ export default function LandingPage({
                       ? 'bg-emerald-500'
                       : 'bg-violet-400'
                 }`} />
-                {connectedSource === 'youtube' ? 'YouTube' : connectedSource === 'spotify' ? 'Spotify' : 'Audio Only'}
+                {connectedSource === 'youtube' ? 'YouTube' : 'Audio Only'}
                 <ChevronDown className={`h-3.5 w-3.5 transition-transform ${connectOpen ? 'rotate-180' : ''}`} />
               </button>
 
@@ -309,26 +309,7 @@ export default function LandingPage({
                     </div>
                   </button>
 
-                  {/* Audio Only option */}
-                  <button
-                    onClick={() => { setConnectedSource('audio'); setConnectOpen(false); }}
-                    className={`flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left transition cursor-pointer ${
-                      connectedSource === 'audio' ? 'bg-violet-500/10' : 'hover:bg-white/5'
-                    }`}
-                  >
-                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-violet-600 text-white shadow">
-                      <Headphones className="h-5 w-5" />
-                    </span>
-                    <div className="flex-1">
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm font-bold text-white">Audio Only</span>
-                        {connectedSource === 'audio' && <span className="rounded-full bg-violet-500/20 px-2 py-0.5 text-[10px] font-bold text-violet-300">Active</span>}
-                      </div>
-                      <p className="mt-0.5 text-xs text-zinc-500">Synced test tones without video</p>
-                    </div>
-                  </button>
-
-                  {/* Spotify — Premium Web Playback SDK */}
+                  {/* Audio Only via Spotify Premium */}
                   <button
                     onClick={() => {
                       setConnectOpen(false);
@@ -347,7 +328,7 @@ export default function LandingPage({
                     </span>
                     <div className="flex-1">
                       <div className="flex items-center justify-between">
-                        <span className="text-sm font-bold text-white">Spotify</span>
+                        <span className="text-sm font-bold text-white">Audio Only</span>
                         {connectedSource === 'spotify' ? (
                           <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-bold text-emerald-400">Active</span>
                         ) : spotifyAuth?.accessToken ? (
@@ -359,7 +340,7 @@ export default function LandingPage({
                       <p className="mt-0.5 text-xs text-zinc-500">
                         {spotifyAuth?.user?.displayName
                           ? `Signed in as ${spotifyAuth.user.displayName}`
-                          : 'Connect Spotify Premium account'}
+                          : 'Original tracks via Spotify Premium'}
                       </p>
                     </div>
                   </button>

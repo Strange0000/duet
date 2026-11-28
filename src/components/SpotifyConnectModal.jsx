@@ -30,7 +30,6 @@ export default function SpotifyConnectModal({ open, onClose, onConnected, onDisc
     setError('');
     try {
       await startSpotifyLogin(clientId);
-      onConnected?.();
     } catch (err) {
       setError(err.message || 'Could not start Spotify login');
     }
@@ -107,17 +106,14 @@ export default function SpotifyConnectModal({ open, onClose, onConnected, onDisc
         ) : (
           <form onSubmit={handleConnect} className="mt-5 space-y-4">
             <p className="text-xs leading-relaxed text-zinc-400">
-              Requires a <strong className="text-white">Spotify Premium</strong> account. Works on Desktop &amp; Android Chrome. Your partner can stay on free YouTube or Audio Only.
+              Requires a <strong className="text-white">Spotify Premium</strong> account. Works on Desktop &amp; Android Chrome. Audio Only plays full tracks from Spotify’s catalog.
             </p>
 
             {!hasEnvClientId && (
               <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-3.5 text-xs leading-relaxed text-amber-200/90">
                 <strong className="text-amber-100">Spotify needs your own developer app.</strong>{' '}
                 Duet has no built-in Spotify app yet, so full-song Spotify playback here
-                requires the room host&apos;s own Spotify developer app Client ID. A normal
-                Spotify account alone cannot play full songs here yet —{' '}
-                <strong className="text-amber-100">if you don&apos;t have your own Spotify app, use YouTube or Audio Only</strong>{' '}
-                (both free). If you do have an app, paste its Client ID below.
+                requires a Spotify developer app. If you have one, paste its Client ID below.
               </div>
             )}
 

@@ -172,7 +172,7 @@ export function registerSocketHandlers(io, store, env) {
       const v = validate(createRoomSchema, raw);
       if (!v.ok) return reply(ack, { ok: false, error: v.error });
 
-      if (v.data.source === 'spotify' && !env.ENABLE_SPOTIFY) {
+      if ((v.data.source === 'spotify' || v.data.source === 'audio') && !env.ENABLE_SPOTIFY) {
         v.data.source = 'youtube';
       }
 
@@ -209,7 +209,7 @@ export function registerSocketHandlers(io, store, env) {
       const v = validate(joinRoomSchema, raw);
       if (!v.ok) return reply(ack, { ok: false, error: v.error });
 
-      if (v.data.source === 'spotify' && !env.ENABLE_SPOTIFY) {
+      if ((v.data.source === 'spotify' || v.data.source === 'audio') && !env.ENABLE_SPOTIFY) {
         v.data.source = 'youtube';
       }
 
@@ -435,7 +435,7 @@ export function registerSocketHandlers(io, store, env) {
       const v = validate(participantUpdateSchema, raw);
       if (!v.ok) return reply(ack, { ok: false, error: v.error });
 
-      if (v.data.source === 'spotify' && !env.ENABLE_SPOTIFY) {
+      if ((v.data.source === 'spotify' || v.data.source === 'audio') && !env.ENABLE_SPOTIFY) {
         return reply(ack, {
           ok: false,
           code: 'PROVIDER_UNAVAILABLE',

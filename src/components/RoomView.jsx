@@ -259,6 +259,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
   const audioUnlocked = isDemo ? demoUnlocked : realAudioUnlocked;
   const currentTrack = isDemo ? demoQueue[demoIdx] || demoQueue[0] : realTrack;
   const hasVideo = !isDemo && mySource === 'youtube' && Boolean(currentTrack);
+  const usesSpotify = mySource === 'spotify' || mySource === 'audio';
   const queue = isDemo
     ? demoQueue.map((t, i) => ({ queueItemId: `demo-${i}`, track: t, addedByName: 'Demo' }))
     : roomState?.queue || [];
@@ -933,7 +934,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
         onClose={() => setShowSpotifyModal(false)}
         onConnected={() => sendCommand('participant:update', { source: 'spotify' })}
         onDisconnected={() => {
-          if (mySource === 'spotify') {
+          if (usesSpotify) {
             sendCommand('participant:update', { source: 'youtube' });
           }
         }}
@@ -1659,31 +1660,30 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                     YouTube
                   </button>
                   <button
-                    onClick={() => handleSourceSwitch('audio')}
-                    aria-pressed={mySource === 'audio' || mySource === 'local'}
-                    className={`flex-1 rounded-full px-2.5 py-1.5 text-center text-xs font-semibold transition sm:flex-none sm:px-3.5 cursor-pointer ${
-                      mySource === 'audio' || mySource === 'local' ? 'bg-violet-600 text-white' : 'text-zinc-400 hover:text-white'
-                    }`}
-                  >
-                    Audio Only
-                  </button>
-                  <button
                     onClick={() => handleSourceSwitch('spotify')}
-                    aria-pressed={mySource === 'spotify'}
-                    title="Spotify Premium (Web Playback SDK)"
-                    className={`flex-1 rounded-full px-2 py-1.5 text-center text-xs font-semibold transition sm:flex-none sm:px-3 cursor-pointer ${
-                      mySource === 'spotify' ? 'bg-emerald-500 text-zinc-950 font-bold' : 'text-zinc-300 hover:text-white'
+                    aria-pressed={usesSpotify || (isDemo && mySource === 'local')}
+                    title="Full tracks with Spotify Premium"
+                    className={`flex-1 rounded-full px-2.5 py-1.5 text-center text-xs font-semibold transition sm:flex-none sm:px-3.5 cursor-pointer ${
+                      usesSpotify || (isDemo && mySource === 'local') ? 'bg-emerald-500 text-zinc-950' : 'text-zinc-300 hover:text-white'
                     }`}
                   >
-                    Spotify
+                    <span className="block">Audio Only</span>
+                    <span className="block text-[10px]">Spotify Premium</span>
                   </button>
                 </div>
               </div>
 
-              {!isDemo && (mySource === 'audio' || mySource === 'local') && (
-                <p className="mb-3 text-xs leading-relaxed text-zinc-300">
-                  Audio Only plays synced test tones. Choose YouTube or Spotify to hear the original recording.
-                </p>
+              {usesSpotify && !isDemo && (
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-x-3 text-xs leading-relaxed text-zinc-300">
+                  <p>Original tracks via Spotify Premium</p>
+                  <button
+                    type="button"
+                    className="min-h-11 font-semibold text-emerald-300 hover:text-emerald-100 cursor-pointer"
+                    onClick={() => setShowSpotifyModal(true)}
+                  >
+                    {getStoredSpotifyAuth()?.accessToken ? 'Manage Spotify' : 'Connect Spotify'}
+                  </button>
+                </div>
               )}
 
               {pendingJoins.length > 0 && (
@@ -1728,12 +1728,12 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
 
                       <div className="room-track-details w-full flex-1 text-center sm:text-left">
                         <span className={`room-source-badge mb-2 inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[10px] font-bold tracking-wider uppercase ${
-                          mySource === 'spotify'
+                          usesSpotify
                             ? 'border-emerald-500/30 bg-emerald-500/15 text-emerald-300'
                             : 'border-violet-500/30 bg-violet-500/15 text-violet-300'
                         }`}>
                           <Volume2 className="h-3 w-3" />{' '}
-                          {mySource === 'spotify' ? 'Spotify Premium · Synced' : 'Audio Only · Sync Test'}
+                          {isDemo ? 'Demo playback' : usesSpotify ? 'Spotify Premium' : 'Sync test'}
                         </span>
                         <h2 className="room-track-title font-display text-2xl font-bold tracking-tight break-words text-white sm:text-3xl">
                           {currentTrack.title}
