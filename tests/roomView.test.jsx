@@ -239,6 +239,44 @@ describe('RoomView renders a real room', () => {
     }
   });
 
+  it('keeps queue additions separate from guest playback and connection permissions', () => {
+    const ctx = makeCtx({ session: { participantId: 'guest-1', role: 'guest' } });
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    document.body.appendChild(container);
+    const render = (canAdd, connectionStatus = 'connected') => act(() => root.render(
+      <RoomContext.Provider value={{
+        ...ctx,
+        connectionStatus,
+        roomState: {
+          ...ctx.roomState,
+          settings: { ...ctx.roomState.settings, allowGuestControl: false, allowGuestQueue: canAdd },
+        },
+      }}>
+        <RoomView onLeave={() => {}} />
+      </RoomContext.Provider>
+    ));
+
+    try {
+      render(false);
+      const addTab = [...container.querySelectorAll('.room-desktop-tabs button')].find((button) => button.textContent === 'Add');
+      act(() => addTab.click());
+      expect(container.querySelector('.room-search-result button').disabled).toBe(true);
+      expect(container.querySelector('.room-play').disabled).toBe(true);
+
+      render(true);
+      expect(container.querySelector('.room-search-result button').disabled).toBe(false);
+      expect(container.querySelector('.room-play').disabled).toBe(true);
+
+      render(true, 'reconnecting');
+      expect(container.querySelector('.room-search-result button').disabled).toBe(true);
+      expect(container.querySelector('.room-permission-note').textContent).toContain('reconnects');
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+    }
+  });
+
   it('transfers hosting to the avatar selected in the lobby', async () => {
     const ctx = makeCtx();
     const host = ctx.roomState.participants[0];

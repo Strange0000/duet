@@ -345,7 +345,10 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
   // Derived active values
   const roomCode = isDemo ? 'DEMO-K7' : roomState?.roomCode || '------';
   const isHost = isDemo ? demoRole === 'host' : session?.role === 'host';
-  const canControl = isHost || (!isDemo && Boolean(roomState?.settings?.allowGuestControl));
+  const roomConnected = isDemo || connectionStatus === 'connected';
+  const hasRoomControl = isHost || (!isDemo && Boolean(roomState?.settings?.allowGuestControl));
+  const canControl = roomConnected && hasRoomControl;
+  const canAddTracks = isDemo || (roomConnected && (hasRoomControl || Boolean(roomState?.settings?.allowGuestQueue)));
   const mySource = isDemo ? demoSource : myParticipant?.source || 'youtube';
   const audioUnlocked = isDemo ? demoUnlocked : realAudioUnlocked;
   const currentTrack = isDemo ? demoQueue[demoIdx] || demoQueue[0] : realTrack;
@@ -356,6 +359,8 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
   const queue = isDemo
     ? demoQueue.map((t, i) => ({ queueItemId: `demo-${i}`, track: t, addedByName: 'Demo' }))
     : roomState?.queue || [];
+  const canPlay = canControl && Boolean(currentTrack);
+  const canStep = canPlay && queue.length > 1;
   const currentQueueItemId = isDemo
     ? `demo-${demoIdx}`
     : roomState?.currentQueueItemId;
@@ -632,6 +637,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
   };
 
   const handleSourceSwitch = async (nextSource) => {
+    if (!roomConnected) return;
     if (isDemo) {
       setDemoSource(nextSource);
       return;
@@ -644,7 +650,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
   };
 
   const handlePlayPause = async () => {
-    if (!canControl) return;
+    if (!canPlay) return;
     if (isDemo) {
       setDemoPlaying((p) => !p);
       return;
@@ -754,7 +760,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
   );
 
   const handleStep = async (dir) => {
-    if (!canControl) return;
+    if (!canStep) return;
     if (isDemo) {
       setDemoIdx((i) => (i + dir + demoQueue.length) % demoQueue.length);
       setDemoTime(0);
@@ -802,6 +808,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
   };
 
   const handleAddYouTubeLink = async (url) => {
+    if (!canAddTracks) return false;
     const videoId = extractYouTubeId(url);
     if (!videoId) return false;
     setSearchError('');
@@ -839,6 +846,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
   };
 
   const handleAddTrack = async (track) => {
+    if (!canAddTracks) return;
     const trackPayload = {
       ...track,
       durationSec: track.durationSec > 0 ? track.durationSec : null,
@@ -910,7 +918,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
   const handleChatInputChange = (e) => {
     setChatText(e.target.value);
     // Send typing indicator (throttled to once per 2s)
-    if (!isDemo && !chatTypingTimerRef.current) {
+    if (!isDemo && roomConnected && !chatTypingTimerRef.current) {
       sendCommand('chat:typing', {}).catch(() => {});
       chatTypingTimerRef.current = setTimeout(() => {
         chatTypingTimerRef.current = null;
@@ -921,7 +929,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
   const handleSendChat = async (e) => {
     e.preventDefault();
     const txt = chatText.trim();
-    if (!txt) return;
+    if (!txt || !roomConnected) return;
     followChatRef.current = true;
     if (isDemo) {
       // M9: demo chat is local-only, like a real room's chat.
@@ -946,6 +954,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
   };
 
   const handleClearQueue = async () => {
+    if (!canControl || queue.length === 0) return;
     if (isDemo) {
       setDemoQueue([]);
       setDemoIdx(0);
@@ -962,6 +971,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
   const tracksPlayedCount = isDemo ? demoIdx + 1 : roomState?.stats?.tracksPlayed || 0;
 
   const handleSendReaction = async (emoji) => {
+    if (!roomConnected) return;
     if (isDemo) {
       // M9: demo reactions are local-only.
       const reaction = {
@@ -1042,7 +1052,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
     }
   }
 
-  const transferTarget = isHost
+  const transferTarget = isHost && roomConnected
     ? lobbyParticipants.find((participant) => participant.id === transferTargetId && participant.canTransferHost)
     : null;
 
@@ -1494,42 +1504,50 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
         {showSettings && (
           <div className="room-settings">
             <div className="room-settings-inner">
-              {!isDemo && canControl && (
-                <div className="room-settings-group">
-                  {[
-                    ['allowGuestQueue', 'Allow guest to add songs'],
-                    ['allowGuestControl', 'Allow guest full control'],
-                    ['requireApproval', 'Require approval to join'],
-                  ].map(([setting, label]) => (
-                    <RoomSwitch
-                      key={setting}
-                      checked={Boolean(roomState?.settings?.[setting])}
-                      onChange={(enabled) => sendCommand('room:settings', { [setting]: enabled })}
-                    >
-                      {label}
-                    </RoomSwitch>
-                  ))}
-                </div>
+              {!isDemo && hasRoomControl && (
+                <section className="room-settings-section" aria-labelledby="room-guest-settings">
+                  <h2 id="room-guest-settings">Guest permissions</h2>
+                  <div className="room-settings-group">
+                    {[
+                      ['allowGuestQueue', 'Allow guest to add songs'],
+                      ['allowGuestControl', 'Allow guest full control'],
+                      ['requireApproval', 'Require approval to join'],
+                    ].map(([setting, label]) => (
+                      <RoomSwitch
+                        key={setting}
+                        checked={Boolean(roomState?.settings?.[setting])}
+                        disabled={!roomConnected}
+                        onChange={(enabled) => sendCommand('room:settings', { [setting]: enabled })}
+                      >
+                        {label}
+                      </RoomSwitch>
+                    ))}
+                  </div>
+                </section>
               )}
-              <div className="room-settings-group">
-                <RoomSwitch checked={glass} onChange={toggleGlass} className="room-glass-toggle">
-                  <Layers2 size={15} aria-hidden="true" /> Glass appearance
-                </RoomSwitch>
-                <button type="button" onClick={() => setShowPrivacy(true)} className="room-button">
-                  <Shield size={15} aria-hidden="true" /> Privacy
-                </button>
-                {!isDemo && isHost && (
-                  <button
-                    type="button"
-                    onClick={() => armOrRun('end', () => sendCommand('room:close', {}))}
-                    className="room-button"
-                    data-tone="danger"
-                    data-armed={armedAction === 'end'}
-                  >
-                    {armedAction === 'end' ? 'Tap again to end room' : 'End room'}
+              <section className="room-settings-section" aria-labelledby="room-appearance-settings">
+                <h2 id="room-appearance-settings">Appearance and session</h2>
+                <div className="room-settings-group">
+                  <RoomSwitch checked={glass} onChange={toggleGlass} className="room-glass-toggle">
+                    <Layers2 size={15} aria-hidden="true" /> Glass appearance
+                  </RoomSwitch>
+                  <button type="button" onClick={() => setShowPrivacy(true)} className="room-button">
+                    <Shield size={15} aria-hidden="true" /> Privacy
                   </button>
-                )}
-              </div>
+                  {!isDemo && isHost && (
+                    <button
+                      type="button"
+                      onClick={() => armOrRun('end', () => sendCommand('room:close', {}))}
+                      className="room-button"
+                      data-tone="danger"
+                      disabled={!roomConnected}
+                      data-armed={armedAction === 'end'}
+                    >
+                      {armedAction === 'end' ? 'Tap again to end room' : 'End room'}
+                    </button>
+                  )}
+                </div>
+              </section>
             </div>
           </div>
         )}
@@ -1568,7 +1586,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                   {reloadingPlayer ? 'Reloading…' : 'Reload player'}
                 </button>
               )}
-              {playerError?.isEmbedBlocked && currentTrack && (
+              {playerError?.isEmbedBlocked && currentTrack && canAddTracks && (
                 <button
                   onClick={async () => {
                     setPlayerError(null);
@@ -1735,6 +1753,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                 </div>
                 <div role="group" aria-label="Playback source" className="room-source-options inline-flex w-full justify-between rounded-full border border-white/10 bg-white/5 p-1 sm:w-auto sm:justify-start">
                   <button
+                    disabled={!roomConnected}
                     onClick={() => handleSourceSwitch('youtube')}
                     aria-pressed={mySource === 'youtube'}
                     className={`flex-1 rounded-full px-2.5 py-1.5 text-center text-xs font-semibold transition sm:flex-none sm:px-3.5 cursor-pointer ${
@@ -1744,6 +1763,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                     YouTube
                   </button>
                   <button
+                    disabled={!roomConnected}
                     onClick={() => handleSourceSwitch('spotify')}
                     aria-pressed={usesSpotify || (isDemo && mySource === 'local')}
                     title="Full tracks with Spotify Premium"
@@ -1859,7 +1879,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                 <div className="room-player-empty">
                   <Disc3 size={32} aria-hidden="true" />
                   <h2>No song playing</h2>
-                  <button type="button" onClick={() => navigateRoom('search')}>Add a song</button>
+                  <button type="button" className="room-button" disabled={!canAddTracks} onClick={() => navigateRoom('search')}>Add a song</button>
                 </div>
               )}
 
@@ -1898,18 +1918,18 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                   {!canControl && (
                     <span className="inline-flex items-center gap-1.5 rounded-full bg-white/5 px-3 py-1 text-xs font-medium text-zinc-400">
                       <Lock className="h-3 w-3 shrink-0" />
-                      <span className="room-host-label hidden sm:inline">Host controls</span>
+                      <span className="room-host-label hidden sm:inline">{roomConnected ? 'Host controls' : 'Reconnecting…'}</span>
                     </span>
                   )}
                 </div>
                 <div className="room-transport-buttons flex items-center justify-center gap-3">
-                  <button onClick={() => handleStep(-1)} disabled={!canControl} aria-label="Previous" className="flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-white/5 text-zinc-300 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer">
+                  <button onClick={() => handleStep(-1)} disabled={!canStep} aria-label="Previous" className="flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-white/5 text-zinc-300 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer">
                     <SkipBack className="h-4 w-4" />
                   </button>
-                  <button onClick={handlePlayPause} disabled={!canControl || playLoading} aria-label={playLoading ? 'Loading…' : isPlaying ? 'Pause' : 'Play'} className="room-play flex h-14 w-14 items-center justify-center rounded-full bg-white text-zinc-950 shadow-lg shadow-white/20 transition-all hover:bg-zinc-200 hover:shadow-white/30 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer">
+                  <button onClick={handlePlayPause} disabled={!canPlay || playLoading} aria-label={playLoading ? 'Loading…' : isPlaying ? 'Pause' : 'Play'} className="room-play flex h-14 w-14 items-center justify-center rounded-full bg-white text-zinc-950 shadow-lg shadow-white/20 transition-all hover:bg-zinc-200 hover:shadow-white/30 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer">
                     {playLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : isPlaying ? <Pause className="h-5 w-5 fill-current" /> : <Play className="h-5 w-5 translate-x-0.5 fill-current" />}
                   </button>
-                  <button onClick={() => handleStep(1)} disabled={!canControl} aria-label="Next" className="flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-white/5 text-zinc-300 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer">
+                  <button onClick={() => handleStep(1)} disabled={!canStep} aria-label="Next" className="flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-white/5 text-zinc-300 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer">
                     <SkipForward className="h-4 w-4" />
                   </button>
                 </div>
@@ -1955,6 +1975,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                   {REACTION_EMOJIS.map((emoji) => (
                     <button
                       key={emoji}
+                      disabled={!roomConnected}
                       onClick={() => handleSendReaction(emoji)}
                       className="rounded-full bg-white/5 px-2.5 py-1.5 text-base transition hover:scale-110 hover:bg-white/10 active:scale-95 sm:px-3 cursor-pointer"
                     >
@@ -2061,7 +2082,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                   participants={lobbyParticipants}
                   pendingJoins={pendingJoins}
                   canManage={canControl}
-                  onSelectHost={isHost ? setTransferTargetId : undefined}
+                  onSelectHost={isHost && roomConnected ? setTransferTargetId : undefined}
                   approvalRequired={Boolean(roomState?.settings?.requireApproval)}
                   onApprovalChange={(requireApproval) => sendCommand('room:settings', { requireApproval })}
                   respondingToJoin={respondingToJoin}
@@ -2088,7 +2109,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                         // Pressing Enter adds the first result — pasting a
                         // YouTube link then hitting Enter is the main way to
                         // add a song, and previously Enter did nothing.
-                        if (e.key === 'Enter') {
+                        if (e.key === 'Enter' && canAddTracks) {
                           e.preventDefault();
                           // A pasted YouTube link adds directly (no waiting
                           // for the search round-trip).
@@ -2104,7 +2125,12 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                       className="w-full rounded-2xl border border-white/10 bg-white/5 py-2.5 pr-4 pl-10 text-sm text-white placeholder:text-zinc-600 focus:border-white/20 focus:outline-none"
                     />
                   </div>
-                  {!isDemo && !youtubeApiConfigured && (
+                  {!canAddTracks && (
+                    <p className="room-permission-note">
+                      {roomConnected ? 'The host has turned off guest queue additions.' : 'You can add songs once the room reconnects.'}
+                    </p>
+                  )}
+                  {canAddTracks && !isDemo && !youtubeApiConfigured && (
                     <p className="text-[11px] text-amber-300/90">
                       Keyword search needs the YouTube API — paste any YouTube link to add a song.
                     </p>
@@ -2113,6 +2139,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                     type="text"
                     maxLength={120}
                     value={dedication}
+                    disabled={!canAddTracks}
                     onChange={(e) => setDedication(e.target.value)}
                     placeholder="Dedication (optional)"
                     aria-label="Dedication for this song (optional)"
@@ -2152,6 +2179,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                         </div>
                         <button
                           onClick={() => handleAddTrack(track)}
+                          disabled={!canAddTracks}
                           aria-label={`Add ${track.title} to queue`}
                           className="inline-flex shrink-0 items-center gap-1 rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-zinc-950 hover:bg-zinc-200 cursor-pointer"
                         >
@@ -2330,7 +2358,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                       maxLength={500}
                       value={chatText}
                       onChange={handleChatInputChange}
-                      placeholder="Message your partner..."
+                      placeholder={roomConnected ? 'Message the room…' : 'Reconnecting…'}
                       aria-label="Chat message"
                       className="min-w-0 flex-1 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs text-white placeholder:text-zinc-500 focus:border-white/20 focus:outline-none"
                     />
@@ -2338,6 +2366,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                       type="submit"
                       className="flex h-9 w-9 items-center justify-center rounded-full bg-white text-zinc-950 hover:bg-zinc-200 cursor-pointer"
                       aria-label="Send message"
+                      disabled={!roomConnected || !chatText.trim()}
                     >
                       <Send className="h-3.5 w-3.5" />
                     </button>

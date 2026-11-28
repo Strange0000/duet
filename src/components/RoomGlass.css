@@ -482,3 +482,43 @@
     --room-frost: blur(9px) saturate(130%);
   }
 }
+
+.room-settings-section {
+  min-width: 0;
+}
+
+.room-settings-section > h2 {
+  margin-bottom: .45rem;
+  color: var(--room-muted);
+  font-size: .75rem;
+  font-weight: 750;
+}
+
+.room-settings-inner {
+  align-items: start;
+  row-gap: .875rem;
+}
+
+.room-permission-note {
+  padding: .65rem .75rem;
+  border: 1px solid var(--room-glass-edge);
+  border-radius: var(--room-button-radius);
+  background: var(--room-field);
+  color: var(--room-ink);
+  font-size: .8125rem;
+}
+
+.duet-room :is(.room-search-result, .room-composer, .room-error, .room-reactions, .room-source-options) button:disabled {
+  cursor: default;
+  opacity: .55;
+}
+
+@media (max-width: 599px) {
+  .room-settings-section {
+    width: 100%;
+  }
+
+  .room-settings-section:first-child .room-switch {
+    width: 100%;
+  }
+}
