@@ -23,6 +23,7 @@ import {
   Search,
   Send,
   Settings,
+  Share2,
   Shield,
   SkipBack,
   SkipForward,
@@ -510,6 +511,36 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
     navigator.clipboard?.writeText(link).catch(() => {});
     setCopiedLink(true);
     setTimeout(() => setCopiedLink(false), 1800);
+  };
+
+  // Native share sheet (phone: WhatsApp, Telegram, …). Falls back to
+  // copying the invite link when Web Share is unavailable or fails.
+  // A dismissed share sheet (AbortError) is silent — no copy, no toast.
+  const handleShareInvite = async () => {
+    const link = `${window.location.origin}/room/${roomCode}`;
+    const trackLabel = currentTrack?.title
+      ? `"${currentTrack.title}"${currentTrack.artist ? ` by ${currentTrack.artist}` : ''}`
+      : null;
+    const text = trackLabel
+      ? `Join my Duet room (code ${roomCode}) — we're listening to ${trackLabel}, at the same second.`
+      : `Join my Duet room (code ${roomCode}) — we're listening to the same song, at the same second.`;
+    const copyFallback = () => {
+      navigator.clipboard?.writeText(link).catch(() => {});
+      setCopiedLink(true);
+      showToast('Invite link copied');
+      setTimeout(() => setCopiedLink(false), 1800);
+    };
+    if (typeof navigator.share === 'function') {
+      try {
+        await navigator.share({ title: 'Duet — listen together', text, url: link });
+        return;
+      } catch (err) {
+        if (err?.name === 'AbortError') return;
+        copyFallback();
+        return;
+      }
+    }
+    copyFallback();
   };
 
   const handleLeaveClick = async () => {
@@ -1155,14 +1186,14 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
           <div className="room-header-actions flex shrink-0 items-center gap-1.5 sm:gap-2">
             {!isDemo && (
               <button
-                onClick={handleCopyInviteLink}
+                onClick={handleShareInvite}
                 className="room-invite inline-flex shrink-0 items-center gap-1 rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-semibold text-zinc-300 transition hover:bg-white/10 cursor-pointer"
-                aria-label={copiedLink ? 'Invite link copied' : 'Copy invite link'}
+                aria-label={copiedLink ? 'Invite link copied' : 'Share invite link'}
               >
-                <span className="sm:hidden">
-                  {copiedLink ? <Check size={16} aria-hidden="true" /> : 'Invite'}
+                <span className="inline-flex items-center gap-1 sm:hidden">
+                  {copiedLink ? <Check size={16} aria-hidden="true" /> : <><Share2 size={16} aria-hidden="true" /> Share</>}
                 </span>
-                <span className="hidden sm:inline">{copiedLink ? 'Copied!' : 'Copy Invite Link'}</span>
+                <span className="hidden sm:inline">{copiedLink ? 'Copied!' : 'Share invite'}</span>
               </button>
             )}
 
@@ -1927,6 +1958,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                     copiedLink,
                     onCopyCode: handleCopyCode,
                     onCopyLink: handleCopyInviteLink,
+                    onShareLink: handleShareInvite,
                   }}
                 />
               )}

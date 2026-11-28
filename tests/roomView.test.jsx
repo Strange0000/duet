@@ -4,7 +4,7 @@
 // in RoomView.jsx without being imported — the ErrorBoundary caught it.)
 // Renders RoomView with a hand-built RoomContext value that mimics a real
 // room (host only, queue with INITIAL_TRACKS) and reports the actual error.
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import React from 'react';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -151,6 +151,109 @@ describe('RoomView renders a real room', () => {
       renderSource('youtube');
       expect(container.querySelector('.room-video')).not.toBeNull();
       expect(ctx.initPlayerForSource).toHaveBeenLastCalledWith('youtube', expect.any(HTMLElement));
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+    }
+  });
+});
+
+describe('invite share', () => {
+  const origShare = Object.getOwnPropertyDescriptor(navigator, 'share');
+  const origClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+
+  function renderRoom() {
+    const ctx = makeCtx();
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    act(() => {
+      root.render(
+        <RoomContext.Provider value={ctx}>
+          <RoomView isDemo={false} onLeave={() => {}} />
+        </RoomContext.Provider>
+      );
+    });
+    return { container, root };
+  }
+
+  function shareButton(container) {
+    return container.querySelector('button[aria-label="Share invite link"], button[aria-label="Invite link copied"]');
+  }
+
+  afterEach(() => {
+    if (origShare) Object.defineProperty(navigator, 'share', origShare);
+    else delete navigator.share;
+    if (origClipboard) Object.defineProperty(navigator, 'clipboard', origClipboard);
+    else delete navigator.clipboard;
+  });
+
+  it('opens the native share sheet with the invite link when navigator.share exists', async () => {
+    const share = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'share', { value: share, configurable: true });
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    const { container, root } = renderRoom();
+    try {
+      await act(async () => { shareButton(container).click(); });
+      expect(share).toHaveBeenCalledTimes(1);
+      expect(share).toHaveBeenCalledWith(expect.objectContaining({
+        title: 'Duet — listen together',
+        url: expect.stringContaining('/room/TEST01'),
+      }));
+      expect(share.mock.calls[0][0].text).toContain('TEST01');
+      expect(share.mock.calls[0][0].text).toContain('Midnight City');
+      expect(writeText).not.toHaveBeenCalled();
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+    }
+  });
+
+  it('falls back to copying the link when navigator.share is missing', async () => {
+    delete navigator.share;
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    const { container, root } = renderRoom();
+    try {
+      await act(async () => { shareButton(container).click(); });
+      expect(writeText).toHaveBeenCalledTimes(1);
+      expect(writeText).toHaveBeenCalledWith(expect.stringContaining('/room/TEST01'));
+      expect(container.querySelector('button[aria-label="Invite link copied"]')).not.toBeNull();
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+    }
+  });
+
+  it('does nothing when the user dismisses the share sheet', async () => {
+    const abort = new Error('Share cancelled');
+    abort.name = 'AbortError';
+    const share = vi.fn().mockRejectedValue(abort);
+    Object.defineProperty(navigator, 'share', { value: share, configurable: true });
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    const { container, root } = renderRoom();
+    try {
+      await act(async () => { shareButton(container).click(); });
+      expect(writeText).not.toHaveBeenCalled();
+      expect(container.querySelector('button[aria-label="Invite link copied"]')).toBeNull();
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+    }
+  });
+
+  it('falls back to copying the link when sharing throws', async () => {
+    const share = vi.fn().mockRejectedValue(new Error('Share failed'));
+    Object.defineProperty(navigator, 'share', { value: share, configurable: true });
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    const { container, root } = renderRoom();
+    try {
+      await act(async () => { shareButton(container).click(); });
+      expect(writeText).toHaveBeenCalledTimes(1);
+      expect(writeText).toHaveBeenCalledWith(expect.stringContaining('/room/TEST01'));
     } finally {
       act(() => root.unmount());
       container.remove();
