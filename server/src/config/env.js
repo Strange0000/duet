@@ -48,6 +48,8 @@ export const env = {
     // Cloudflare Pages production: duet-music.pages.dev
     // Cloudflare Pages branch deploys: <branch>.duet-music.pages.dev
     // Cloudflare Pages deploy previews: <commit>.duet-music.pages.dev
+    // Second Pages project (new address): duet-music-app.pages.dev,
+    // with the same <branch>. / <commit>. subdomain shapes.
     try {
       const url = new URL(origin);
       if (
@@ -56,6 +58,8 @@ export const env = {
         (url.hostname.endsWith('.netlify.app') && url.hostname.includes('duet')) ||
         url.hostname === 'duet-music.pages.dev' ||
         url.hostname.endsWith('.duet-music.pages.dev') ||
+        url.hostname === 'duet-music-app.pages.dev' ||
+        url.hostname.endsWith('.duet-music-app.pages.dev') ||
         url.hostname === 'localhost' ||
         url.hostname === '127.0.0.1'
       ) {
