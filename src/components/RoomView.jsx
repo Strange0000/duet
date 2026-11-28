@@ -11,6 +11,7 @@ import {
   Copy,
   Disc3,
   Heart,
+  Layers2,
   ListMusic,
   Lock,
   MessageCircle,
@@ -48,7 +49,7 @@ import ThemeBackground, { THEME_CONFIG } from './ThemeBackground';
 import './RoomView.css';
 import './RoomDesktop.css';
 import './RoomGlass.css';
-import { getHomeTheme } from '../utils/appearance';
+import { getGlassAppearance, getHomeTheme, GLASS_APPEARANCE_KEY } from '../utils/appearance';
 
 const THEME_STYLES = THEME_CONFIG;
 
@@ -218,6 +219,15 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
   const [searchError, setSearchError] = useState('');
   const [chatText, setChatText] = useState('');
   const [showSettings, setShowSettings] = useState(false);
+  const [glass, setGlass] = useState(getGlassAppearance);
+  const toggleGlass = () => {
+    setGlass(!glass);
+    try {
+      localStorage.setItem(GLASS_APPEARANCE_KEY, glass ? 'off' : 'on');
+    } catch {
+      // The setting still applies for this visit.
+    }
+  };
   const [showNotifications, setShowNotifications] = useState(false);
   const [respondingToJoin, setRespondingToJoin] = useState(false);
   const [chatToast, setChatToast] = useState(null);
@@ -228,7 +238,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
   const [showSessionSummary, setShowSessionSummary] = useState(false);
   const [showSpotifyModal, setShowSpotifyModal] = useState(false);
   const chatTypingTimerRef = useRef(null);
-  const lastSeenChatIdRef = useRef(null);
+  const chatNotificationHistoryRef = useRef(null);
   const knownParticipantIdsRef = useRef(null);
   const knownPendingJoinIdsRef = useRef(new Set());
   const toastTimerRef = useRef(null);
@@ -352,29 +362,32 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
     if (chatInView) setChatToast((toast) => toast?.type === 'chat' ? null : toast);
   }, [chatInView]);
 
-  // Pop notification toast & record notification when partner sends a message
   useEffect(() => {
-    if (isDemo || !roomState?.chat?.length) return;
-    const latest = roomState.chat[roomState.chat.length - 1];
-    if (!latest) return;
+    if (isDemo || !session?.participantId || !roomState?.roomCode) return;
 
-    if (lastSeenChatIdRef.current === null) {
-      lastSeenChatIdRef.current = latest.id;
-      return;
+    const messages = roomState.chat || [];
+    const previous = chatNotificationHistoryRef.current;
+    const sameRoom = previous?.roomCode === roomState.roomCode;
+    const known = sameRoom ? previous.ids : new Set();
+    const received = [];
+    for (const message of messages) {
+      if (known.has(message.id)) continue;
+      known.add(message.id);
+      if (message.senderId !== session.participantId) received.push({ type: 'chat', ...message });
     }
+    chatNotificationHistoryRef.current = {
+      roomCode: roomState.roomCode,
+      ids: new Set(messages.map((message) => message.id)),
+    };
 
-    if (latest.id !== lastSeenChatIdRef.current) {
-      lastSeenChatIdRef.current = latest.id;
-      if (latest.senderId !== session?.participantId) {
-        setNotifications((prev) => [{ type: 'chat', ...latest }, ...prev].slice(0, 15));
-        if (!chatInView) {
-          setChatToast({ type: 'chat', ...latest });
-          if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
-          toastTimerRef.current = setTimeout(() => setChatToast(null), 5000);
-        }
-      }
+    if (received.length === 0) return;
+    setNotifications((current) => [...received.slice().reverse(), ...current].slice(0, 15));
+    if (sameRoom && !chatInView) {
+      setChatToast(received.at(-1));
+      clearTimeout(toastTimerRef.current);
+      toastTimerRef.current = setTimeout(() => setChatToast(null), 5000);
     }
-  }, [isDemo, roomState?.chat, session?.participantId, chatInView]);
+  }, [isDemo, roomState?.roomCode, roomState?.chat, session?.participantId, chatInView]);
 
   // Notify when a partner joins or requests to join
   useEffect(() => {
@@ -915,6 +928,8 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
   };
   const syncLabel = isDemo
     ? 'Simulated'
+    : playerError?.code === 'PLAY_STALLED'
+      ? 'Playback stalled'
     : connectionStatus === 'reconnecting'
       ? 'Reconnecting…'
     : ctxSyncStatus
@@ -975,6 +990,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
       className="duet-room relative min-h-screen overflow-x-hidden"
       data-compact={isMobileLayout}
       data-appearance={appearance}
+      data-glass={glass ? 'on' : 'off'}
       style={{
         '--room-accent': themeConfig.accent,
         '--room-secondary': themeConfig.secondary,
@@ -1332,6 +1348,18 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
               </div>
             )}
 
+            {isDemo && (
+              <button
+                type="button"
+                className="room-header-action"
+                aria-label="Room settings"
+                aria-expanded={showSettings}
+                onClick={() => setShowSettings((open) => !open)}
+              >
+                <Settings size={16} />
+              </button>
+            )}
+
             {/* Demo perspective switcher */}
             {isDemo && (
               <div className="room-demo-roles inline-flex items-center rounded-full border border-white/10 bg-white/5 p-0.5">
@@ -1381,12 +1409,12 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
         )}
 
         {/* Settings drawer — toggled by Settings gear icon */}
-        {showSettings && !isDemo && (
+        {showSettings && (
           <div className="room-settings border-t border-white/5 bg-zinc-950/70 px-4 py-2 sm:px-8">
             <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-x-4 gap-y-2">
               {/* Settings checkboxes + actions */}
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
-                {canControl && (
+                {!isDemo && canControl && (
                   <>
                     <label className="flex items-center gap-1.5 text-[11px] text-zinc-400 cursor-pointer select-none hover:text-zinc-200 transition">
                       <input
@@ -1425,13 +1453,18 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                 )}
               </div>
               <div className="flex flex-wrap items-center gap-2">
+                <button type="button" className="room-glass-toggle" aria-pressed={glass} onClick={toggleGlass}>
+                  <Layers2 size={15} aria-hidden="true" />
+                  Glass appearance
+                  <span aria-hidden="true" className="room-glass-switch" />
+                </button>
                 <button
                   onClick={() => setShowPrivacy(true)}
                   className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/5 px-2.5 py-0.5 text-[11px] font-semibold text-zinc-400 hover:bg-white/10 hover:text-white cursor-pointer transition"
                 >
                   <Shield className="h-3 w-3" /> Privacy
                 </button>
-                {isHost && partnerParticipant && (
+                {!isDemo && isHost && partnerParticipant && (
                   <button
                     onClick={() =>
                       armOrRun('host', () =>
@@ -1449,7 +1482,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                     {armedAction === 'host' ? 'Tap again to make host' : `Make ${partnerParticipant.name} Host`}
                   </button>
                 )}
-                {isHost && (
+                {!isDemo && isHost && (
                   <button
                     onClick={() => armOrRun('end', () => sendCommand('room:close', {}))}
                     className={`rounded-full px-3 py-1 text-[11px] font-bold text-white cursor-pointer transition ${
@@ -1584,7 +1617,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                         window.scrollTo({ top: 0, behavior: 'instant' });
                       }}
                     >
-                      <span className="room-status-dot" data-status={ctxSyncStatus} aria-hidden="true" />
+                      <span className="room-status-dot" data-status={playerError?.code === 'PLAY_STALLED' ? 'error' : ctxSyncStatus} aria-hidden="true" />
                       {syncLabel}
                       {partnerParticipant && <span className="room-sync-rtt">{syncMetrics.rttMs} ms</span>}
                     </button>

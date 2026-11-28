@@ -9,3 +9,13 @@ export function getHomeTheme() {
   }
   return window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
 }
+
+export const GLASS_APPEARANCE_KEY = 'duet_room_glass';
+
+export function getGlassAppearance() {
+  try {
+    return localStorage.getItem(GLASS_APPEARANCE_KEY) === 'on';
+  } catch {
+    return false;
+  }
+}

@@ -7,7 +7,7 @@ import { INITIAL_TRACKS, SEARCH_CATALOG, formatTime } from '../data/mockTracks';
 import { fetchSongArtwork } from '../utils/artworkApi';
 import { canUseSpotify, getStoredSpotifyAuth } from '../utils/spotifyAuth';
 import SpotifyConnectModal from './SpotifyConnectModal';
-import { HOME_THEME_KEY } from '../utils/appearance';
+import { getGlassAppearance, HOME_THEME_KEY } from '../utils/appearance';
 import './LandingPage.css';
 
 const DEMO_TRACKS = [0, 1, 4];
@@ -325,9 +325,10 @@ export default function LandingPage({
   };
 
   const createRoom = () => onCreateRoom(connectedSource);
+  const [glass] = useState(getGlassAppearance);
 
   return (
-    <div className="duet-home" data-theme={homeTheme} id="home">
+    <div className="duet-home" data-theme={homeTheme} data-glass={glass ? 'on' : 'off'} id="home">
       <SpotifyConnectModal
         open={spotifyModalOpen}
         onClose={() => { setSpotifyModalOpen(false); connectButtonRef.current?.focus(); }}
@@ -423,17 +424,22 @@ export default function LandingPage({
               )}
             </div>
           </div>
-          <div className="home-hero-art">
+          <figure className="home-hero-art">
             <img
-              src="/home/headphones.webp"
-              srcSet="/home/headphones-small.webp 640w, /home/headphones.webp 1320w"
+              src="/home/duet-headphones.webp"
+              srcSet="/home/duet-headphones-small.webp 640w, /home/duet-headphones.webp 1320w"
               sizes="(max-width: 899px) 94vw, 55vw"
               width="1320"
-              height="880"
+              height="990"
               fetchPriority="high"
-              alt="Two pairs of headphones on layers of violet glass"
+              alt="Lavender and plum headphones on a smoked violet surface"
             />
-          </div>
+            <div className="home-hero-spectrum" aria-hidden="true">
+              {[22, 38, 53, 29, 66, 44, 77, 48, 33, 58, 40, 23].map((height, index) => (
+                <i key={index} style={{ '--bar-height': `${height}%`, '--bar-delay': `${index * -90}ms` }} />
+              ))}
+            </div>
+          </figure>
         </section>
 
         <section id="features" className="home-section home-shell">

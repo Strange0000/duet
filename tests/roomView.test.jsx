@@ -126,6 +126,63 @@ describe('RoomView renders a real room', () => {
     container.remove();
   });
 
+  it('lists the first received chat message and opens chat from the notification', () => {
+    const ctx = makeCtx();
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    document.body.appendChild(container);
+    const render = (roomState) => act(() => root.render(
+      <RoomContext.Provider value={{ ...ctx, roomState }}>
+        <RoomView onLeave={() => {}} />
+      </RoomContext.Provider>
+    ));
+
+    try {
+      render(ctx.roomState);
+      act(() => container.querySelector('[aria-label="Notifications"]').click());
+      expect(container.querySelector('.room-notifications').textContent).toContain('No new notifications');
+
+      const message = { id: 'first-chat', senderId: 'guest-1', senderName: 'Guest', text: 'First message' };
+      render({ ...ctx.roomState, chat: [message] });
+      render({ ...ctx.roomState, chat: [message] });
+      const notification = container.querySelector('.room-notifications .max-h-64 button');
+      expect(notification.textContent).toContain('First message');
+      expect(container.querySelectorAll('.room-notifications .max-h-64 button')).toHaveLength(1);
+      act(() => notification.click());
+      expect(container.querySelector('[aria-label="Chat message"]')).not.toBeNull();
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+    }
+  });
+
+  it('toggles the glass appearance independently of room settings and persists it', () => {
+    const ctx = makeCtx();
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    document.body.appendChild(container);
+    localStorage.removeItem('duet_room_glass');
+
+    try {
+      act(() => root.render(
+        <RoomContext.Provider value={ctx}>
+          <RoomView onLeave={() => {}} />
+        </RoomContext.Provider>
+      ));
+      act(() => container.querySelector('[aria-label="Room settings"]').click());
+      const toggle = container.querySelector('.room-glass-toggle');
+      act(() => toggle.click());
+      expect(toggle.getAttribute('aria-pressed')).toBe('true');
+      expect(container.querySelector('.duet-room').dataset.glass).toBe('on');
+      expect(localStorage.getItem('duet_room_glass')).toBe('on');
+      expect(ctx.sendCommand).not.toHaveBeenCalled();
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+      localStorage.removeItem('duet_room_glass');
+    }
+  });
+
   it('shows every participant in a six-person lobby', () => {
     const ctx = makeCtx();
     const guest = ctx.roomState.participants[0];

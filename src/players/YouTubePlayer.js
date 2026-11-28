@@ -63,6 +63,7 @@ const YT_ERROR_MESSAGES = {
   100: 'This video was removed or marked private.',
   101: 'The video owner disabled playback on external sites.',
   150: 'The video owner disabled embedding for this track.',
+  153: 'YouTube could not verify this embedded player. Try Reload player.'
 };
 
 /**
@@ -467,7 +468,7 @@ export class YouTubePlayer extends BasePlayer {
     });
   }
 
-  async play() {
+  async play(positionMs) {
     if (!this.isReady || !this.player) {
       // Round 4: a previous recovery's re-init may have failed (timed
       // out) — the player instance is attached but will never become
@@ -533,15 +534,17 @@ export class YouTubePlayer extends BasePlayer {
         this.player.playVideo();
         return;
       }
-      let startSec = 0;
-      try {
-        startSec = Math.max(0, this.player.getCurrentTime?.() || 0);
-      } catch {
-        // Fall through with startSec 0; the drift loop seeks to the
-        // expected position once playback starts.
+      let startMs = positionMs ?? this.targetStartPositionMs ?? 0;
+      if (positionMs == null && this.readLoadedVideoId() === this.currentVideoId) {
+        startMs = Math.max(0, this.player.getCurrentTime?.() || 0) * 1000;
       }
-      this.restartPlayback(startSec * 1000);
+      this.restartPlayback(startMs);
       return;
+    }
+    if (Number.isFinite(positionMs) && this.state !== 'buffering' &&
+        this.readLoadedVideoId() === this.currentVideoId &&
+        Math.abs(positionMs - await this.getPosition()) > 450) {
+      await this.seek(positionMs);
     }
     this.player.playVideo();
   }

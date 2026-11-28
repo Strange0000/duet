@@ -281,3 +281,58 @@
     animation: room-reveal 200ms ease-out both;
   }
 }
+
+.room-glass-toggle {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  gap: .5rem;
+  padding-inline: .75rem;
+  border: 1px solid var(--room-glass-edge);
+  border-radius: .75rem;
+  background: var(--room-field);
+  color: var(--room-ink);
+  font-size: .8125rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.room-glass-switch {
+  display: flex;
+  width: 1.75rem;
+  height: 1rem;
+  align-items: center;
+  padding-inline: .18rem;
+  border-radius: 1rem;
+  background: var(--room-muted);
+}
+
+.room-glass-switch::after {
+  content: '';
+  width: .64rem;
+  height: .64rem;
+  border-radius: 50%;
+  background: #fff;
+}
+
+.room-glass-toggle[aria-pressed="true"] .room-glass-switch {
+  justify-content: end;
+  background: var(--room-action);
+}
+
+@media (prefers-reduced-transparency: no-preference) {
+  .duet-room[data-glass="on"] {
+    --room-glass-panel: linear-gradient(140deg, color-mix(in srgb, var(--room-glass-highlight) 71%, transparent), color-mix(in srgb, var(--room-surface) 80%, transparent) 76%);
+    --room-glass-bar: color-mix(in srgb, var(--room-surface) 79%, transparent);
+  }
+
+  .duet-room[data-glass="on"] :is(.room-player, .room-activity-surface, .room-partner) {
+    backdrop-filter: blur(18px) saturate(135%);
+    box-shadow: inset 0 1px rgb(255 255 255 / 18%), 0 18px 36px var(--room-shadow);
+  }
+
+  .duet-room[data-glass="on"] :is(.room-settings, .room-dialog-surface, .room-share-dialog) {
+    background: var(--room-glass-panel);
+    backdrop-filter: blur(18px) saturate(135%);
+  }
+}

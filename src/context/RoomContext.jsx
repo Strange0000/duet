@@ -448,10 +448,9 @@ export function RoomProvider({ children }) {
       }
       playWatchdogAttemptRef.current = 0;
 
-      // A stalled YouTube embed gets one fresh load at the live room
-      // position. Repeated status packets must never restart this timer.
+      // Retry once at the current room position if the media clock has stopped.
       const armStallWatchdog = (anchorMs) => {
-        if (playWatchdogTimerRef.current) return;
+        if (playWatchdogTimerRef.current || playWatchdogAttemptRef.current >= 2) return;
         const check = async () => {
           playWatchdogTimerRef.current = null;
           const state = roomStateRef.current?.playback;
@@ -467,11 +466,9 @@ export function RoomProvider({ children }) {
 
           if (playWatchdogAttemptRef.current === 0) {
             playWatchdogAttemptRef.current = 1;
-            const latest = roomStateRef.current?.playback;
-            const targetMs = computeExpectedPositionMs(latest, clockSyncRef.current.estimateServerNowMs());
             if (player instanceof YouTubePlayer) {
-              player.restartPlayback(targetMs);
-              anchorMs = targetMs;
+              anchorMs = computeExpectedPositionMs(roomStateRef.current?.playback, clockSyncRef.current.estimateServerNowMs());
+              player.restartPlayback(anchorMs);
             } else {
               await player.play().catch(() => {});
             }
@@ -482,6 +479,7 @@ export function RoomProvider({ children }) {
             return;
           }
 
+          playWatchdogAttemptRef.current = 2;
           setPlayerError({
             code: 'PLAY_STALLED',
             message: 'Playback is stalled. Try Reload player, or skip this track.',
@@ -542,22 +540,26 @@ export function RoomProvider({ children }) {
             ? Math.max(0, playback.effectiveAtServerMs - estimatedNow)
             : 0;
 
-        if (delayMs > 20 && delayMs < 3000) {
-          scheduledPlayTimerRef.current = setTimeout(async () => {
-            scheduledPlayTimerRef.current = null;
-            if (playerRef.current !== player) return;
-            await player.seek(playback.anchorPositionMs || 0);
+        const start = async (positionMs) => {
+          if (playerRef.current !== player || lastAppliedPlaybackRef.current !== signature || !audioUnlockedRef.current) return;
+          if (player instanceof YouTubePlayer) {
+            await player.play(positionMs);
+          } else {
+            const currentPos = await player.getPosition();
+            if (Math.abs(currentPos - positionMs) > 450) await player.seek(positionMs);
             await player.play();
-            if (await player.getState() !== 'error') armStallWatchdog(playback.anchorPositionMs || 0);
+          }
+          if (await player.getState() !== 'error') armStallWatchdog(positionMs);
+        };
+
+        if (delayMs > 20 && delayMs < 3000) {
+          scheduledPlayTimerRef.current = setTimeout(() => {
+            scheduledPlayTimerRef.current = null;
+            const now = clockSyncRef.current.estimateServerNowMs();
+            start(computeExpectedPositionMs(playback, now)).catch(() => {});
           }, delayMs);
         } else {
-          const currentPos = await player.getPosition();
-          if (Math.abs(currentPos - expectedMs) > 450) {
-            await player.seek(expectedMs);
-          }
-          await player.play();
-          // R1: the first Play after a cue is the stall case — watch it.
-          if (await player.getState() !== 'error') armStallWatchdog(expectedMs);
+          await start(expectedMs);
         }
       } else {
         await player.pause();
@@ -623,20 +625,10 @@ export function RoomProvider({ children }) {
           playerStateRef.current = state;
           setPlayerState(state);
           if (state === 'playing') {
-            // Round 4 (d): the "Playback didn't start" banner stayed
-            // visible even while playback was genuinely advancing —
-            // playerError was only cleared on track change / re-init /
-            // manual dismiss. A real PLAYING state means the player
-            // recovered, so clear it here.
-            setPlayerError(null);
+            setPlayerError((error) => error?.code === 'PLAY_STALLED' ? error : null);
           }
           if (state === 'buffering' && audioUnlockedRef.current) {
             monitorPlaybackRef.current?.(lastPlayerPositionRef.current);
-          }
-          if (state === 'playing') {
-            clearTimeout(playWatchdogTimerRef.current);
-            playWatchdogTimerRef.current = null;
-            playWatchdogAttemptRef.current = 0;
           }
           if (
             state === 'paused' &&
@@ -875,7 +867,7 @@ export function RoomProvider({ children }) {
         markPartnerSeen();
       }
       setRoomState((prev) => {
-        if (!prev) return prev;
+        if (!prev || prev.chat?.some((message) => message.id === msg.id)) return prev;
         return { ...prev, chat: [...(prev.chat || []), msg].slice(-100) };
       });
       if (msg.senderId !== sessionRef.current?.participantId) {
@@ -1096,7 +1088,13 @@ export function RoomProvider({ children }) {
         'youtube';
       if (playerRef.current !== player || roomStateRef.current?.playback?.trackVersion !== st.playback.trackVersion) return;
       const expectedId = expectedMediaId(curTrack, mySource);
-      if (effectivePlayerState === 'playing') {
+      if (effectivePlayerState === 'buffering' && st.playback.playbackState === 'playing') {
+        monitorPlaybackRef.current?.(actualMs);
+      }
+      if (effectivePlayerState === 'playing' && positionAdvanced && (!expectedId || expectedId === loadedId)) {
+        clearTimeout(playWatchdogTimerRef.current);
+        playWatchdogTimerRef.current = null;
+        playWatchdogAttemptRef.current = 0;
         setPlayerError((error) => error?.code === 'PLAY_STALLED' ? null : error);
       }
 

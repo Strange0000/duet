@@ -321,6 +321,20 @@ describe('YouTubePlayer (R1 first Play, R5 stale duration)', () => {
     container.remove();
   });
 
+  it('starts a cued video directly at the room position without seeking first', async () => {
+    const player = new YouTubePlayer();
+    const container = makeContainer();
+    await initPlayer(player, container);
+    await player.loadTrack(MIDNIGHT_CITY, 0, false);
+
+    await player.play(4250);
+
+    expect(fakePlayer.loadVideoById).toHaveBeenLastCalledWith({ videoId: MIDNIGHT_CITY.youtubeId, startSeconds: 4.25 });
+    expect(fakePlayer.seekTo).not.toHaveBeenCalled();
+    await player.destroy();
+    container.remove();
+  });
+
   it('R1: play() on a merely-cued video force-loads it instead of calling playVideo()', async () => {
     const player = new YouTubePlayer({ onStateChange: vi.fn() });
     const container = makeContainer();
