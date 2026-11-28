@@ -390,40 +390,44 @@ export default function LandingPage({
       <main>
         <section className="home-hero home-shell" aria-labelledby="home-headline">
           <div className="home-hero-copy">
-            <h1 id="home-headline">One song.<br /><span>Same second.</span></h1>
-            <p className="home-hero-lead">Create a listening room, share the invite, and hear the same song together, wherever you are.</p>
-            <div className="home-hero-actions">
-              <button type="button" className="home-primary" onClick={createRoom} disabled={roomLoading}>
-                {roomLoading ? 'Creating your room…' : 'Create a Room'} <ArrowRight size={17} aria-hidden="true" />
-              </button>
-              <button type="button" className="home-link" onClick={() => onOpenDemo()}>
-                <Play size={16} aria-hidden="true" /> Try the demo
-              </button>
+            <div className="home-hero-intro">
+              <h1 id="home-headline">One song.<br /><span>Same second.</span></h1>
+              <p className="home-hero-lead">Create a listening room, share the invite, and hear the same song together, wherever you are.</p>
             </div>
-            <form className="home-join" onSubmit={handleJoin}>
-              <label htmlFor="home-room-code">Have a room code?</label>
-              <div>
-                <input
-                  id="home-room-code"
-                  type="text"
-                  autoCapitalize="characters"
-                  autoComplete="off"
-                  maxLength={8}
-                  value={joinCode}
-                  onChange={(event) => { setJoinCode(event.target.value.toUpperCase()); setJoinErr(''); }}
-                  aria-label="Room code"
-                  placeholder="Enter room code"
-                />
-                <button type="submit" disabled={roomLoading}>Join <ArrowRight size={15} aria-hidden="true" /></button>
+            <div className="home-hero-controls">
+              <div className="home-hero-actions">
+                <button type="button" className="home-primary" onClick={createRoom} disabled={roomLoading}>
+                  {roomLoading ? 'Creating your room…' : 'Create a Room'} <ArrowRight size={17} aria-hidden="true" />
+                </button>
+                <button type="button" className="home-link" onClick={() => onOpenDemo()}>
+                  <Play size={16} aria-hidden="true" /> Try the demo
+                </button>
               </div>
-            </form>
-            {(joinErr || roomError) && <p className="home-form-error" role="alert">{joinErr || friendlyRoomError(roomError)}</p>}
-            {pendingApproval && <p className="home-room-status" role="status">Waiting for host approval to join {pendingApproval.roomCode}…</p>}
-            {lastRoomCode && (
-              <button type="button" className="home-link home-rejoin" onClick={() => onJoinRoom(lastRoomCode, connectedSource)} disabled={roomLoading}>
-                <RotateCcw size={14} aria-hidden="true" /> Rejoin {lastRoomCode}
-              </button>
-            )}
+              <form className="home-join" onSubmit={handleJoin}>
+                <label htmlFor="home-room-code">Have a room code?</label>
+                <div>
+                  <input
+                    id="home-room-code"
+                    type="text"
+                    autoCapitalize="characters"
+                    autoComplete="off"
+                    maxLength={8}
+                    value={joinCode}
+                    onChange={(event) => { setJoinCode(event.target.value.toUpperCase()); setJoinErr(''); }}
+                    aria-label="Room code"
+                    placeholder="Enter room code"
+                  />
+                  <button type="submit" disabled={roomLoading}>Join <ArrowRight size={15} aria-hidden="true" /></button>
+                </div>
+              </form>
+              {(joinErr || roomError) && <p className="home-form-error" role="alert">{joinErr || friendlyRoomError(roomError)}</p>}
+              {pendingApproval && <p className="home-room-status" role="status">Waiting for host approval to join {pendingApproval.roomCode}…</p>}
+              {lastRoomCode && (
+                <button type="button" className="home-link home-rejoin" onClick={() => onJoinRoom(lastRoomCode, connectedSource)} disabled={roomLoading}>
+                  <RotateCcw size={14} aria-hidden="true" /> Rejoin {lastRoomCode}
+                </button>
+              )}
+            </div>
           </div>
           <div className="home-hero-art">
             <img
