@@ -3,7 +3,7 @@
  */
 export function computeExpectedPositionMs(playback, estimatedServerNowMs) {
   if (!playback) return 0;
-  const durationMs = Math.max(0, playback.durationMs || 0);
+  const durationMs = playback.durationMs > 0 ? playback.durationMs : Infinity;
   const anchorPos = Math.max(0, Math.min(durationMs, playback.anchorPositionMs || 0));
 
   if (playback.playbackState !== 'playing') {

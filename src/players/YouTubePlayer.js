@@ -446,6 +446,18 @@ export class YouTubePlayer extends BasePlayer {
     }
   }
 
+  resumeFromGesture(positionMs) {
+    if (!this.isReady || !this.player || !this.currentVideoId || this.playerFailed) return;
+    const startSeconds = Math.max(0, positionMs / 1000);
+    if (this.hasPlayedVideoId !== this.currentVideoId && this.loadIssuedForVideoId !== this.currentVideoId) {
+      this.loadIssuedForVideoId = this.currentVideoId;
+      this.player.loadVideoById({ videoId: this.currentVideoId, startSeconds });
+    } else {
+      this.player.seekTo(startSeconds, true);
+      this.player.playVideo();
+    }
+  }
+
   async play() {
     if (!this.isReady || !this.player) {
       // Round 4: a previous recovery's re-init may have failed (timed

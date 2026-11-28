@@ -126,6 +126,34 @@ describe('RoomView renders a real room', () => {
     container.remove();
   });
 
+  it('inherits light mode while exposing all six shared room themes', () => {
+    const ctx = makeCtx();
+    ctx.roomState.settings.theme = 'ocean';
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    localStorage.setItem('duet_home_theme', 'light');
+
+    try {
+      act(() => root.render(
+        <RoomContext.Provider value={ctx}>
+          <RoomView onLeave={() => {}} />
+        </RoomContext.Provider>
+      ));
+      expect(container.querySelector('.duet-room').dataset.appearance).toBe('light');
+      expect(container.querySelector('.room-ambient').dataset.theme).toBe('ocean');
+      act(() => container.querySelector('.room-theme-trigger').click());
+      const options = container.querySelector('#room-theme-options');
+      expect(options.hidden).toBe(false);
+      expect(options.querySelectorAll('.room-theme-swatch')).toHaveLength(6);
+      expect(options.querySelector('[aria-pressed="true"]').textContent).toContain('Deep Ocean');
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+      localStorage.removeItem('duet_home_theme');
+    }
+  });
+
   it.each(['audio', 'local'])('omits the video mount for %s and restores it for YouTube', (source) => {
     const ctx = makeCtx();
     const container = document.createElement('div');

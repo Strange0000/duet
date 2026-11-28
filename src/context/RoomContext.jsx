@@ -14,7 +14,7 @@ import { YouTubePlayer } from '../players/YouTubePlayer';
 import { emitAck, generateCommandId, getSocket } from '../services/socketClient';
 import { backgroundAudio } from '../utils/backgroundAudio';
 import { ClockSync } from '../utils/clockSync';
-import { computeExpectedPositionMs, computePlaybackSignature, evaluateDriftCorrection, playerHasStarted, resolvePlaybackStatus, shouldReapplyPlayback, shouldReportRealDuration } from '../utils/playbackSync';
+import { computeExpectedPositionMs, computePlaybackSignature, evaluateDriftCorrection, playerHasStarted, resolveNowPlayingDurationSec, resolvePlaybackStatus, shouldReapplyPlayback, shouldReportRealDuration } from '../utils/playbackSync';
 
 export const RoomContext = createContext(null);
 
@@ -55,15 +55,6 @@ function saveSession(data) {
     sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(data));
   } catch {
     // Ignore storage quota errors
-  }
-}
-
-function loadSession() {
-  try {
-    const raw = sessionStorage.getItem(SESSION_STORAGE_KEY);
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
   }
 }
 
@@ -233,30 +224,29 @@ export function RoomProvider({ children }) {
   // while the local player has no live state yet (idle / ready).
   const syncStatus = useMemo(() => {
     const participants = roomState?.participants || [];
-    const partner = participants.find((p) => session && p.id !== session.participantId) || null;
-    const me = participants.find((p) => session && p.id === session.participantId);
-    // Round 4 (c): the partner's reported position (broadcast with every
-    // room:state, stored server-side by player:status) vs my reported
-    // position. The old check only compared MY drift against the server
-    // anchor — when the host lagged the anchor, the guest (following the
-    // anchor) could sit ~25s ahead of the host while both pills said
-    // "In sync". null when either side has no position yet.
-    const partnerDriftMs =
-      me && partner && typeof me.reportedPositionMs === 'number' && typeof partner.reportedPositionMs === 'number'
-        ? Math.round((syncMetrics.reportedPositionMs || 0) - (partner.reportedPositionMs || 0))
-        : null;
+    const peers = participants.filter((p) => session && p.id !== session.participantId && p.connected);
+    const me = participants.find((p) => p.id === session?.participantId);
+    const now = clockSyncRef.current.estimateServerNowMs();
+    // Compare samples on the same clock. A peer whose timer stopped reporting
+    // cannot count as synced while the room is playing.
+    const largestPeerDrift = peers.reduce((largest, peer) => {
+      const age = now - peer.positionReportedAtMs;
+      if (!peer.positionReportedAtMs || age > 3500) return Infinity;
+      const peerPosition = peer.reportedPositionMs + Math.max(0, age);
+      return Math.max(largest, Math.abs(syncMetrics.reportedPositionMs - peerPosition));
+    }, 0);
     return resolvePlaybackStatus({
       playerState,
       serverPlaybackState: roomState?.playback?.playbackState,
-      participantsBuffering: participants.some((p) => p.buffering),
+      participantsBuffering: peers.some((p) => p.buffering) || Boolean(me?.buffering),
       driftMs: syncMetrics.driftMs,
-      hasPartner: participants.length >= 2 && !!partner,
-      partnerReady: !!partner?.ready,
+      hasPartner: peers.length > 0,
+      partnerReady: peers.every((peer) => peer.ready),
       meReady: me ? !!me.ready : participants.length < 2,
       hasRoomState: !!roomState,
-      partnerDriftMs,
+      partnerDriftMs: peers.length ? largestPeerDrift : null,
     });
-  }, [roomState, session, syncMetrics.driftMs, syncMetrics.reportedPositionMs, playerState]);
+  }, [roomState, session, syncMetrics.driftMs, syncMetrics.reportedPositionMs, playerState, presenceTickMs]);
 
   // M3: volume / mute controls (UI subagent renders the slider).
   const setVolume = useCallback((v) => {
@@ -456,6 +446,7 @@ export function RoomProvider({ children }) {
           const p = playerRef.current;
           const st = roomStateRef.current;
           if (!p || !st?.playback || st.playback.playbackState !== 'playing') return;
+          if (st.playback.trackVersion !== playback.trackVersion || lastAppliedPlaybackRef.current !== signature) return;
           let state = 'idle';
           let pos = 0;
           try {
@@ -468,7 +459,8 @@ export function RoomProvider({ children }) {
           } catch {
             // Treat as stalled below
           }
-          if (state === 'playing' || pos - anchorMs >= 500) return;
+          if (playerRef.current !== p || lastAppliedPlaybackRef.current !== signature) return;
+          if (state === 'playing' || state === 'error' || pos - anchorMs >= 500) return;
           if (playWatchdogAttemptRef.current < 1) {
             playWatchdogAttemptRef.current += 1;
             try {
@@ -508,8 +500,7 @@ export function RoomProvider({ children }) {
         }));
         // B1: pass shouldPlay so YouTube uses loadVideoById (loads AND plays)
         // instead of cueVideoById (loads paused, losing the immediate play()).
-        const requiresUnlock = isLocalAudio || player instanceof SpotifyPlayer;
-        const shouldPlay = playback.playbackState === 'playing' && (!requiresUnlock || audioUnlockedRef.current);
+        const shouldPlay = playback.playbackState === 'playing' && audioUnlockedRef.current;
         const trackToLoad = isLocalAudio && playback.durationMs > 0
           ? { ...track, durationSec: playback.durationMs / 1000 }
           : track;
@@ -533,10 +524,8 @@ export function RoomProvider({ children }) {
         return;
       }
 
-      if (!audioUnlockedRef.current || playerRef.current !== player) return;
-
-      backgroundAudio.updateMetadata(track);
-      await backgroundAudio.setPlaying(playback.playbackState === 'playing');
+      if (playerRef.current !== player) return;
+      if (playback.playbackState === 'playing' && !audioUnlockedRef.current) return;
 
       if (playback.playbackState === 'playing') {
         const delayMs =
@@ -762,12 +751,9 @@ export function RoomProvider({ children }) {
     const onConnect = () => {
       setConnectionStatus('connected');
       runClockSync();
-      // N-03: auto-reconnect whenever we have an active session — on a fresh
-      // page load AND after a mid-room network blip. The old
-      // `!roomStateRef.current` guard blocked the mid-room case entirely:
-      // roomState was already set, so no room:reconnect was ever sent and
-      // every command then failed NOT_IN_ROOM.
-      const cur = sessionRef.current || loadSession();
+      // Initial invite navigation restores its session through room:join.
+      // An already-mounted room re-adopts its socket after a network drop.
+      const cur = sessionRef.current;
       if (cur?.roomCode && cur?.sessionToken) {
         emitAck('room:reconnect', {
           roomCode: cur.roomCode,
@@ -842,6 +828,12 @@ export function RoomProvider({ children }) {
           markPartnerSeen();
         }
       }
+      if (
+        prev && (prev.currentQueueItemId !== nextState.currentQueueItemId ||
+          prev.playback?.trackVersion !== nextState.playback?.trackVersion)
+      ) {
+        seedPositionFromPlayback(nextState.playback);
+      }
       setRoomState(nextState);
       if (sessionRef.current) {
         const me = nextState.participants.find((p) => p.id === sessionRef.current.participantId);
@@ -851,44 +843,6 @@ export function RoomProvider({ children }) {
           saveSession(updated);
         }
       }
-    };
-
-    const onPlaybackState = (playback) => {
-      // R3: when the partner is the host, a playback state is their command
-      // arriving — proof they are live. (When I am host it is my own echo,
-      // so it proves nothing about the partner.)
-      const partner = roomStateRef.current?.participants?.find(
-        (p) => sessionRef.current && p.id !== sessionRef.current.participantId
-      );
-      if (partner?.role === 'host') markPartnerSeen();
-      // B1 (root cause): this used to derive the track from
-      // roomStateRef.current and call applyPlaybackToPlayer here. But the
-      // server emits playback:state BEFORE queue:updated, so at this moment
-      // currentQueueItemId is still the PREVIOUS track while `playback`
-      // already carries the NEW trackVersion — applyPlaybackToPlayer then
-      // loaded the OLD video with the new track's position, and the player
-      // lagged one track behind forever. So this handler only updates the
-      // state; the effect below (which reads the track from the latest
-      // roomState, after queue:updated lands) is the single place that
-      // drives the player.
-      if (playback?.trackVersion !== roomStateRef.current?.playback?.trackVersion) {
-        setSyncMetrics((prev) => ({
-          ...prev,
-          reportedPositionMs: 0,
-          expectedPositionMs: 0,
-          driftMs: 0,
-        }));
-      }
-      setRoomState((prev) => (prev ? { ...prev, playback } : prev));
-    };
-
-    const onQueueUpdated = ({ queue, currentQueueItemId }) => {
-      // R3: same host-command liveness signal as onPlaybackState.
-      const partner = roomStateRef.current?.participants?.find(
-        (p) => sessionRef.current && p.id !== sessionRef.current.participantId
-      );
-      if (partner?.role === 'host') markPartnerSeen();
-      setRoomState((prev) => (prev ? { ...prev, queue, currentQueueItemId } : prev));
     };
 
     const onChatMessage = (msg) => {
@@ -1000,9 +954,6 @@ export function RoomProvider({ children }) {
     socket.on('room:created', onRoomCreated);
     socket.on('room:joined', onRoomJoined);
     socket.on('room:join-declined', onJoinDeclined);
-    socket.on('playback:state', onPlaybackState);
-    socket.on('playback:scheduled', onPlaybackState);
-    socket.on('queue:updated', onQueueUpdated);
     socket.on('chat:message', onChatMessage);
     socket.on('chat:typing', onPartnerTyping);
     socket.on('reaction:burst', onReactionBurst);
@@ -1010,13 +961,8 @@ export function RoomProvider({ children }) {
 
     // E-01: listen for the host:promoted event from the server so the guest
     // learns they became host after the original host disconnected.
-    const onHostPromoted = ({ reason }) => {
-      if (sessionRef.current) {
-        const updated = { ...sessionRef.current, role: 'host' };
-        setSession(updated);
-        saveSession(updated);
-      }
-      // Surface the promotion as a room-level notification the UI can show.
+    const onHostPromoted = ({ reason, participantId }) => {
+      if (participantId && participantId !== sessionRef.current?.participantId) return;
       setRoomError(reason || 'You are now the host.');
     };
     socket.on('host:promoted', onHostPromoted);
@@ -1029,9 +975,6 @@ export function RoomProvider({ children }) {
       socket.off('room:created', onRoomCreated);
       socket.off('room:joined', onRoomJoined);
       socket.off('room:join-declined', onJoinDeclined);
-      socket.off('playback:state', onPlaybackState);
-      socket.off('playback:scheduled', onPlaybackState);
-      socket.off('queue:updated', onQueueUpdated);
       socket.off('chat:message', onChatMessage);
       socket.off('chat:typing', onPartnerTyping);
       socket.off('reaction:burst', onReactionBurst);
@@ -1069,7 +1012,7 @@ export function RoomProvider({ children }) {
 
   // Periodic drift measurement & correction loop (every 1000ms while playing)
   useEffect(() => {
-    if (!roomState || !audioUnlocked) return;
+    if (!roomState?.roomCode || !audioUnlocked) return;
     const interval = setInterval(async () => {
       const player = playerRef.current;
       const st = roomStateRef.current;
@@ -1126,9 +1069,12 @@ export function RoomProvider({ children }) {
         null;
       const mySource =
         st.participants?.find((p) => sessionRef.current && p.id === sessionRef.current.participantId)?.source ||
-        myParticipant?.source ||
         'youtube';
+      if (playerRef.current !== player || roomStateRef.current?.playback?.trackVersion !== st.playback.trackVersion) return;
       const expectedId = expectedMediaId(curTrack, mySource);
+      if (effectivePlayerState === 'playing') {
+        setPlayerError((error) => error?.code === 'PLAY_STALLED' ? null : error);
+      }
 
       // N-02/B2: read the real duration every tick; report it to the server
       // when it differs from the stored one, and never seek the player back
@@ -1142,6 +1088,7 @@ export function RoomProvider({ children }) {
       } catch {
         realDurationMs = 0;
       }
+      if (playerRef.current !== player || roomStateRef.current?.playback?.trackVersion !== st.playback.trackVersion) return;
       if (realDurationMs > 0 && !(player instanceof LocalAudioPlayer)) {
         // Round 4 (a): only report once the player has actually started
         // this track — an errored player's getDuration() returns the
@@ -1176,6 +1123,9 @@ export function RoomProvider({ children }) {
       }
 
       if (st.playback.playbackState !== 'playing') {
+        if (typeof actualMs === 'number' && Math.round(actualMs) !== st.participants?.find((p) => p.id === sessionRef.current?.participantId)?.reportedPositionMs) {
+          emitAck('player:status', { reportedPositionMs: Math.round(actualMs) }).catch(() => {});
+        }
         setSyncMetrics((prev) => ({
           ...prev,
           reportedPositionMs: Math.round(actualMs),
@@ -1237,7 +1187,7 @@ export function RoomProvider({ children }) {
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [roomState, audioUnlocked]);
+  }, [roomState?.roomCode, audioUnlocked, reportRealDuration]);
 
   // M8: keep syncMetrics.expectedPositionMs fresh even when audio is not
   // unlocked yet (the drift loop above only runs when audioUnlocked, which
@@ -1282,7 +1232,7 @@ export function RoomProvider({ children }) {
     updateExpected();
     const interval = setInterval(updateExpected, 1000);
     return () => clearInterval(interval);
-  }, [roomState]);
+  }, [roomState?.roomCode]);
 
   // Visibility-change reconciliation (mobile foreground recovery)
   useEffect(() => {
@@ -1446,6 +1396,10 @@ export function RoomProvider({ children }) {
     setAudioUnlocked(true);
     audioUnlockedRef.current = true;
     const player = playerRef.current;
+    const playback = roomStateRef.current?.playback;
+    if (player instanceof YouTubePlayer && playback?.playbackState === 'playing') {
+      player.resumeFromGesture(computeExpectedPositionMs(playback, clockSyncRef.current.estimateServerNowMs()));
+    }
     if (player instanceof LocalAudioPlayer) {
       const [unlocked] = await Promise.all([player.unlockAudio(), backgroundAudio.unlock()]);
       if (!unlocked && playerRef.current === player) {
@@ -1459,12 +1413,14 @@ export function RoomProvider({ children }) {
         backgroundAudio.unlock(),
       ]);
     }
-    await emitAck('player:ready', { ready: true }).catch(() => {});
     const st = roomStateRef.current;
-    if (st?.playback && currentTrack) {
-      await applyPlaybackToPlayer(st.playback, currentTrack);
+    const track = st?.queue?.find((item) => item.queueItemId === st.currentQueueItemId)?.track;
+    lastAppliedPlaybackRef.current = null;
+    if (st?.playback && track) {
+      await applyPlaybackToPlayer(st.playback, track);
     }
-  }, [applyPlaybackToPlayer, currentTrack]);
+    emitAck('player:ready', { ready: true }).catch(() => {});
+  }, [applyPlaybackToPlayer]);
 
   // Round 4: full in-app player reset — what a page reload does, without
   // reloading the page. Called by the error banner's "Reload player"
@@ -1583,8 +1539,6 @@ export function RoomProvider({ children }) {
     const canControl =
       session?.role === 'host' || Boolean(roomState?.settings?.allowGuestControl);
 
-    backgroundAudio.updateMetadata(currentTrack);
-    backgroundAudio.setPlaying(roomState.playback?.playbackState === 'playing');
     backgroundAudio.setActionHandlers({
       onPlay: () => {
         if (canControl) {
@@ -1622,19 +1576,21 @@ export function RoomProvider({ children }) {
   ]);
 
   useEffect(() => {
-    if (!currentTrack) return;
-    // E-06/I-12: prefer the server's authoritative durationMs over the
-    // seed-track's durationSec. During a track change the seed data may
-    // still carry the previous track's length for a tick, causing the
-    // lock-screen scrubber to flicker to the wrong duration before the
-    // new value arrives.
-    const durSec =
-      Math.round((roomState?.playback?.durationMs || 0) / 1000) ||
-      currentTrack.durationSec ||
-      1;
-    const posSec = Math.round((syncMetrics.reportedPositionMs || 0) / 1000);
-    backgroundAudio.updatePosition(posSec, durSec);
-  }, [currentTrack, roomState?.playback?.durationMs, syncMetrics.reportedPositionMs]);
+    backgroundAudio.clearPosition();
+    backgroundAudio.updateMetadata(currentTrack);
+    if (roomState?.roomCode) {
+      backgroundAudio.setPlaying(Boolean(currentTrack) && roomState?.playback?.playbackState === 'playing' && audioUnlocked);
+    }
+  }, [audioUnlocked, currentTrack?.id, roomState?.roomCode, roomState?.playback?.playbackState, roomState?.playback?.trackVersion]);
+
+  useEffect(() => {
+    if (!currentTrack || !(roomState?.playback?.durationMs > 0 || currentTrack.durationSec > 0)) return;
+    const duration = resolveNowPlayingDurationSec({
+      playbackDurationMs: roomState?.playback?.durationMs,
+      trackDurationSec: currentTrack.durationSec,
+    });
+    backgroundAudio.updatePosition((syncMetrics.reportedPositionMs || 0) / 1000, duration);
+  }, [currentTrack, roomState?.playback?.durationMs, roomState?.playback?.playbackState, roomState?.playback?.trackVersion, syncMetrics.reportedPositionMs]);
 
   useEffect(() => {
     const onVisibilityChange = () => {

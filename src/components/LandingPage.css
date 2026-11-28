@@ -901,3 +901,27 @@
     border-radius: 0.625rem;
   }
 }
+
+.home-hero-art {
+  box-shadow: 0 0 0 1px var(--home-edge), 0 20px 50px color-mix(in srgb, var(--home-accent) 15%, transparent);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .home-hero-intro,
+  .home-hero-controls,
+  .home-source-dropdown {
+    animation: home-content-in 340ms cubic-bezier(.2,.7,.2,1) both;
+  }
+
+  .home-hero-controls { animation-delay: 65ms; }
+  .home-hero-art img { transition: transform 550ms cubic-bezier(.2,.7,.2,1); }
+
+  @media (hover: hover) {
+    .home-hero-art:hover img { transform: scale(1.035); }
+  }
+}
+
+@keyframes home-content-in {
+  from { opacity: 0; translate: 0 8px; }
+  to { opacity: 1; translate: 0 0; }
+}

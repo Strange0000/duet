@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { RoomStore, generateSecureRoomCode } from '../src/stores/roomStore.js';
 
 const sampleTrack = {
@@ -84,6 +84,34 @@ describe('RoomStore unit tests', () => {
     expect(hostPlay.error).toBeUndefined();
     expect(hostPlay.room.playback.playbackState).toBe('playing');
     expect(hostPlay.room.playback.anchorPositionMs).toBe(15000);
+  });
+
+  it('allows guest queue additions by default and honors the host disabling them', () => {
+    const host = store.createRoom({ name: 'Host', initialTracks: [sampleTrack] });
+    const guest = store.joinRoom({ roomCode: host.room.code, name: 'Guest' });
+
+    expect(store.addToQueue(host.room.code, guest.participantId, { track: secondTrack }).addedItem?.track).toMatchObject(secondTrack);
+    store.updateSettings(host.room.code, host.participantId, { allowGuestQueue: false });
+    expect(store.addToQueue(host.room.code, guest.participantId, { track: secondTrack }).error).toMatch(/guest/i);
+  });
+
+  it('hands over a playing room without resetting its playback or keeping the retired host', () => {
+    vi.useFakeTimers();
+    try {
+      const host = store.createRoom({ name: 'Host', initialTracks: [sampleTrack] });
+      const guest = store.joinRoom({ roomCode: host.room.code, name: 'Guest' });
+      store.play(host.room.code, host.participantId, { positionMs: 15000 });
+      store.markDisconnected(host.room.code, host.participantId);
+      vi.advanceTimersByTime(5000);
+
+      const state = store.serializeRoom(host.room);
+      expect(state.participants.map(({ id, role }) => ({ id, role }))).toEqual([{ id: guest.participantId, role: 'host' }]);
+      expect(state.playback.playbackState).toBe('playing');
+      expect(store.reconnect({ roomCode: host.room.code, sessionToken: host.sessionToken }).error).toBeTruthy();
+      expect(store.pause(host.room.code, guest.participantId, {}).room.playback.anchorPositionMs).toBe(20000);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('handles duplicate commandId idempotently and skips stale roomVersion', () => {

@@ -5,11 +5,11 @@ import {
 } from 'lucide-react';
 import { INITIAL_TRACKS, SEARCH_CATALOG, formatTime } from '../data/mockTracks';
 import { fetchSongArtwork } from '../utils/artworkApi';
-import { getStoredSpotifyAuth } from '../utils/spotifyAuth';
+import { canUseSpotify, getStoredSpotifyAuth } from '../utils/spotifyAuth';
 import SpotifyConnectModal from './SpotifyConnectModal';
+import { HOME_THEME_KEY } from '../utils/appearance';
 import './LandingPage.css';
 
-const HOME_THEME_KEY = 'duet_home_theme';
 const DEMO_TRACKS = [0, 1, 4];
 const CREATOR_LINKS = [
   { label: 'Instagram', href: 'https://www.instagram.com/sumit_jaiswal__', icon: Instagram },
@@ -27,7 +27,7 @@ const STEPS = [
 const FAQS = [
   {
     q: 'Does my friend need Spotify Premium?',
-    a: 'Your friend can use YouTube for free. Audio Only uses Spotify Premium and requires Spotify developer app setup.',
+    a: 'Your friend can use YouTube for free. For Audio Only, you need your own Spotify developer app (Client ID) and each Spotify listener needs Premium.',
   },
   {
     q: 'Does Duet work on iPhone and Android?',
@@ -43,22 +43,12 @@ const FAQS = [
   },
 ];
 
-function getHomeTheme() {
-  try {
-    const saved = localStorage.getItem(HOME_THEME_KEY);
-    if (saved === 'light' || saved === 'dark') return saved;
-  } catch {
-    // Use the system preference when storage is unavailable.
-  }
-  return window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
-}
-
 const TRENDING_SONGS = [
   { img: '/cover-midnight.jpg', title: 'Midnight City', artist: 'M83' },
   { img: '/cover-instant.jpg', title: 'Instant Crush', artist: 'Daft Punk' },
   { img: '/cover-resonance.jpg', title: 'Resonance', artist: 'HOME' },
   { img: '/cover-synth.jpg', title: 'Blinding Lights', artist: 'The Weeknd' },
-  { img: 'https://i.ytimg.com/vi/Kp7eSUU9oy8/hqdefault.jpg', title: 'Redbone', artist: 'Childish Gambino' },
+  { img: 'https://i.ytimg.com/vi/nxuzYWcY2O0/hqdefault.jpg', title: 'Redbone', artist: 'Childish Gambino' },
   { img: '/cover-indie.jpg', title: 'The Less I Know The Better', artist: 'Tame Impala' },
   { img: '/cover-synth.jpg', title: 'Starboy', artist: 'The Weeknd' },
   { img: '/cover-instant.jpg', title: 'After Dark', artist: 'Mr.Kitty' },
@@ -274,13 +264,14 @@ export default function LandingPage({
   roomLoading,
   roomError,
   pendingApproval,
+  homeTheme,
+  setHomeTheme,
 }) {
   const [joinCode, setJoinCode] = useState('');
   const [joinErr, setJoinErr] = useState('');
   const [connectOpen, setConnectOpen] = useState(false);
-  const [homeTheme, setHomeTheme] = useState(getHomeTheme);
   const [spotifyModalOpen, setSpotifyModalOpen] = useState(false);
-  const [connectedSource, setConnectedSource] = useState(() => getStoredSpotifyAuth()?.accessToken ? 'spotify' : 'youtube');
+  const [connectedSource, setConnectedSource] = useState(() => canUseSpotify() ? 'spotify' : 'youtube');
   const [spotifyAuth, setSpotifyAuth] = useState(getStoredSpotifyAuth);
   const connectButtonRef = useRef(null);
   const nextTheme = homeTheme === 'light' ? 'dark' : 'light';
@@ -314,7 +305,7 @@ export default function LandingPage({
 
   const selectSource = (source) => {
     setConnectOpen(false);
-    if (source === 'spotify' && !spotifyAuth?.accessToken) {
+    if (source === 'spotify' && !canUseSpotify(spotifyAuth)) {
       setSpotifyModalOpen(true);
     } else {
       setConnectedSource(source);
@@ -381,7 +372,7 @@ export default function LandingPage({
                     <Youtube size={20} aria-hidden="true" /><span><strong>YouTube</strong><small>Free with video</small></span>
                   </button>
                   <button type="button" aria-pressed={connectedSource === 'spotify'} onClick={() => selectSource('spotify')}>
-                    <Headphones size={20} aria-hidden="true" /><span><strong>Audio Only</strong><small>Original tracks via Spotify Premium</small></span>
+                    <Headphones size={20} aria-hidden="true" /><span><strong>{canUseSpotify(spotifyAuth) ? 'Audio Only' : spotifyAuth?.accessToken ? 'Manage Spotify' : 'Set up Spotify'}</strong><small>{canUseSpotify(spotifyAuth) ? 'Spotify Premium' : 'Premium required'}</small></span>
                   </button>
                 </div>
               )}
@@ -475,7 +466,7 @@ export default function LandingPage({
           <div className="home-story-copy">
             <h2>Hear the drop together.</h2>
             <p>Queue up the tracks you keep coming back to and chat while you listen. When a friend joins, Duet catches them up to the host’s spot in the song.</p>
-            <p><strong>Pick your playback source.</strong> Use YouTube for free or stream a matching track without video through Spotify Premium.</p>
+            <p><strong>Pick your playback source.</strong> Use YouTube for free. Spotify Audio Only requires your own Spotify developer app (Client ID) and a Premium account for each Spotify listener.</p>
           </div>
         </section>
 

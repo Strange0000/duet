@@ -38,21 +38,16 @@ export const env = {
   isAllowedOrigin(origin) {
     if (!origin) return true; // N-30: same-origin / CLI — accepted on purpose
     if (baseOrigins.includes(origin) || baseOrigins.includes('*')) return true;
-    // Netlify deploy previews: <deploy-id>--duet-music.netlify.app
-    // Netlify branch deploys:  <branch>--duet-music.netlify.app
-    // Netlify deploy permalinks: deploy-preview-<n>--duet-music.netlify.app
-    // Netlify production: duet-music.netlify.app
     try {
       const url = new URL(origin);
-      if (
-        url.hostname === 'duet-music.netlify.app' ||
-        url.hostname.endsWith('--duet-music.netlify.app') ||
-        (url.hostname.endsWith('.netlify.app') && url.hostname.includes('duet')) ||
-        url.hostname === 'localhost' ||
-        url.hostname === '127.0.0.1'
-      ) {
-        return true;
+      if (url.origin !== origin) return false;
+      if (['localhost', '127.0.0.1'].includes(url.hostname)) {
+        return url.protocol === 'http:' || url.protocol === 'https:';
       }
+      return url.protocol === 'https:' && !url.port && (
+        ['duet-music.netlify.app', 'duet-music.pages.dev', 'duet-music-app.pages.dev'].includes(url.hostname) ||
+        /^[a-z0-9-]+--duet-music\.netlify\.app$/.test(url.hostname)
+      );
     } catch {
       // Not a URL — reject
     }

@@ -69,7 +69,11 @@ class BackgroundAudioManager {
   }
 
   updateMetadata(track) {
-    if (typeof navigator === 'undefined' || !('mediaSession' in navigator) || !track) return;
+    if (typeof navigator === 'undefined' || !('mediaSession' in navigator) ) return;
+    if (!track) {
+      navigator.mediaSession.metadata = null;
+      return;
+    }
     if (typeof window.MediaMetadata === 'undefined') return;
 
     const artwork = [];
@@ -89,6 +93,15 @@ class BackgroundAudioManager {
       });
     } catch {
       // Ignore unsupported metadata
+    }
+  }
+
+  clearPosition() {
+    if (typeof navigator === 'undefined') return;
+    try {
+      navigator.mediaSession?.setPositionState?.();
+    } catch {
+      // Unsupported media session.
     }
   }
 

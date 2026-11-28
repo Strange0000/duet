@@ -86,10 +86,10 @@ export const SEARCH_CATALOG = [
     artist: 'Childish Gambino',
     album: 'Awaken, My Love!',
     durationSec: 326,
-    coverImage: 'https://i.ytimg.com/vi/Kp7eSUU9oy8/hqdefault.jpg',
+    coverImage: 'https://i.ytimg.com/vi/nxuzYWcY2O0/hqdefault.jpg',
     coverGradient: 'from-sky-500 via-blue-700 to-indigo-950',
     accentColor: '#0284c7',
-    youtubeId: 'Kp7eSUU9oy8',
+    youtubeId: 'nxuzYWcY2O0',
     spotifyUri: 'spotify:track:0wXuerDYiBnERgIpbb3JBR',
   },
   {

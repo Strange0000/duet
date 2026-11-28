@@ -1,6 +1,7 @@
 import React, { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { RoomProvider, useRoom } from './context/RoomContext';
-import { handleSpotifyCallback } from './utils/spotifyAuth';
+import { getHomeTheme } from './utils/appearance';
+import { canUseSpotify, handleSpotifyCallback } from './utils/spotifyAuth';
 
 const LandingPage = lazy(() => import('./components/LandingPage'));
 const RoomView = lazy(() => import('./components/RoomView'));
@@ -8,13 +9,20 @@ const RoomView = lazy(() => import('./components/RoomView'));
 const LAST_ROOM_KEY = 'duet_last_room';
 const SESSION_STORAGE_KEY = 'duet_active_session';
 
+function getInviteCode() {
+  return /^\/room\/([A-Z2-9]{6})$/i.exec(window.location.pathname)?.[1].toUpperCase() || null;
+}
+
 /* ——— Loading Spinner ——— */
-function LoadingFallback() {
+function LoadingFallback({ message = 'Loading…', appearance = getHomeTheme() }) {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-950">
+    <div
+      className={`flex min-h-screen items-center justify-center ${appearance === 'light' ? 'bg-[#f9f5f1] text-[#592a65]' : 'bg-[#18131b] text-[#ddb9e7]'}`}
+      role="status"
+    >
       <div className="flex flex-col items-center gap-3">
-        <div className="h-8 w-8 animate-spin rounded-full border-2 border-white/20 border-t-white" />
-        <span className="text-xs font-semibold text-zinc-500">Loading…</span>
+        <div aria-hidden="true" className="h-8 w-8 rounded-full border-2 border-current border-r-transparent motion-safe:animate-spin" />
+        <span className="text-sm font-semibold">{message}</span>
       </div>
     </div>
   );
@@ -175,6 +183,8 @@ function DuetAppShell() {
     clearRoomError,
     setRoomError,
   } = useRoom();
+  const [homeTheme, setHomeTheme] = useState(getHomeTheme);
+  const [resolvingInvite, setResolvingInvite] = useState(() => Boolean(getInviteCode()));
   const [demoActive, setDemoActive] = useState(false);
   // M6: the track a trending card asked the demo to start with (null = default).
   const [demoTrack, setDemoTrack] = useState(null);
@@ -208,10 +218,16 @@ function DuetAppShell() {
     if (!isHandlingSpotifyCallback || spotifyCallbackStartedRef.current) return;
     spotifyCallbackStartedRef.current = true;
     handleSpotifyCallback(window.location.search)
-      .then(({ returnPath }) => {
+      .then(({ auth, returnPath }) => {
         const roomMatch = /^\/room\/([A-Z2-9]{6})$/i.exec(returnPath.split('?')[0]);
-        if (roomMatch) setSpotifyRoomCode(roomMatch[1].toUpperCase());
+        if (canUseSpotify(auth)) {
+          if (roomMatch) setSpotifyRoomCode(roomMatch[1].toUpperCase());
+        } else {
+          const message = 'Spotify Premium is required for Audio Only. You can keep listening with YouTube.';
+          setSpotifyCallbackError(message);
+        }
         window.history.replaceState(null, '', returnPath || '/');
+        setResolvingInvite(Boolean(getInviteCode()));
         setIsHandlingSpotifyCallback(false);
       })
       .catch((err) => {
@@ -222,10 +238,14 @@ function DuetAppShell() {
   }, [isHandlingSpotifyCallback]);
 
   useEffect(() => {
+    if (roomState?.roomCode && spotifyCallbackError) {
+      setRoomError(spotifyCallbackError);
+      setSpotifyCallbackError('');
+    }
     if (!spotifyRoomCode || roomState?.roomCode !== spotifyRoomCode || connectionStatus !== 'connected') return;
     setSpotifyRoomCode(null);
     sendCommand('participant:update', { source: 'spotify' });
-  }, [connectionStatus, roomState?.roomCode, sendCommand, spotifyRoomCode]);
+  }, [connectionStatus, roomState?.roomCode, sendCommand, setRoomError, spotifyCallbackError, spotifyRoomCode]);
 
   // M7: clear any stale room error when the landing page mounts.
   useEffect(() => {
@@ -236,9 +256,8 @@ function DuetAppShell() {
   // Handle /room/:code invitation links
   useEffect(() => {
     if (isHandlingSpotifyCallback) return;
-    const match = /^\/room\/([A-Z2-9]{6})$/i.exec(window.location.pathname);
-    if (!match) return;
-    const code = match[1].toUpperCase();
+    const code = getInviteCode();
+    if (!code) return;
     if (joinAttemptedRef.current === code) return;
     joinAttemptedRef.current = code;
     setRoomLoading(true);
@@ -258,9 +277,14 @@ function DuetAppShell() {
       .catch((err) => {
         if (/not found|expired|ROOM_NOT_FOUND/i.test(err?.message || roomError || '')) {
           setRoomNotFound(code);
+        } else {
+          setRoomError(err?.message || 'Could not join the room.');
         }
       })
-      .finally(() => setRoomLoading(false));
+      .finally(() => {
+        setResolvingInvite(false);
+        setRoomLoading(false);
+      });
   }, [joinRoom, isHandlingSpotifyCallback]);
 
   useEffect(() => {
@@ -329,13 +353,14 @@ function DuetAppShell() {
 
   if (demoActive) {
     return (
-      <Suspense fallback={<LoadingFallback />}>
+      <Suspense fallback={<LoadingFallback appearance={homeTheme} />}>
         <RoomView
           isDemo
           onLeave={handleLeave}
           demoTrack={demoTrack}
           demoState={demoState}
           onDemoStateChange={setDemoState}
+          appearance={homeTheme}
         />
       </Suspense>
     );
@@ -343,35 +368,42 @@ function DuetAppShell() {
 
   if (roomState) {
     return (
-      <Suspense fallback={<LoadingFallback />}>
-        <RoomView isDemo={false} onLeave={handleLeave} />
+      <Suspense fallback={<LoadingFallback message="Opening your room…" appearance={homeTheme} />}>
+        <RoomView isDemo={false} onLeave={handleLeave} appearance={homeTheme} />
       </Suspense>
     );
   }
 
-  if (roomNotFound) {
-    return (
-      <RoomNotFoundScreen
-        code={roomNotFound}
-        onCreateRoom={handleCreateRoom}
-        onJoinRoom={handleJoinRoom}
-        roomLoading={roomLoading}
-      />
-    );
+  if (resolvingInvite && !roomNotFound) {
+    return <LoadingFallback message="Joining your room…" appearance={homeTheme} />;
   }
 
   return (
-    <Suspense fallback={<LoadingFallback />}>
-      <LandingPage
-        onCreateRoom={handleCreateRoom}
-        onJoinRoom={handleJoinRoom}
-        onOpenDemo={handleOpenDemo}
-        lastRoomCode={lastRoomCode}
-        roomLoading={roomLoading}
-        roomError={spotifyCallbackError || roomError}
-        pendingApproval={pendingApproval}
-      />
-    </Suspense>
+    <>
+      {roomNotFound ? (
+        <RoomNotFoundScreen
+          code={roomNotFound}
+          onCreateRoom={handleCreateRoom}
+          onJoinRoom={handleJoinRoom}
+          roomLoading={roomLoading}
+        />
+      ) : (
+        <Suspense fallback={<LoadingFallback appearance={homeTheme} />}>
+          <LandingPage
+            onCreateRoom={handleCreateRoom}
+            onJoinRoom={handleJoinRoom}
+            onOpenDemo={handleOpenDemo}
+            lastRoomCode={lastRoomCode}
+            roomLoading={roomLoading}
+            roomError={spotifyCallbackError || roomError}
+            pendingApproval={pendingApproval}
+            homeTheme={homeTheme}
+            setHomeTheme={setHomeTheme}
+          />
+        </Suspense>
+      )}
+      <PWAInstallBanner />
+    </>
   );
 }
 
@@ -379,7 +411,6 @@ export default function App() {
   return (
     <RoomProvider>
       <DuetAppShell />
-      <PWAInstallBanner />
     </RoomProvider>
   );
 }

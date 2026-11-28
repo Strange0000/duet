@@ -8,7 +8,9 @@ export const THEME_CONFIG = {
     accent: '#8b5cf6',
     secondary: '#6366f1',
     image: '/themes/midnight-bg.jpg',
-    bgBase: 'bg-[#06050c]',
+    canvas: '#171039',
+    paper: '#f0e9ff',
+    lightAccent: '#5140a6',
   },
   aurora: {
     id: 'aurora',
@@ -16,7 +18,9 @@ export const THEME_CONFIG = {
     accent: '#10b981',
     secondary: '#06b6d4',
     image: '/themes/aurora-bg.jpg',
-    bgBase: 'bg-[#030c0c]',
+    canvas: '#042c24',
+    paper: '#dbf8ec',
+    lightAccent: '#08745a',
   },
   sunset: {
     id: 'sunset',
@@ -24,7 +28,9 @@ export const THEME_CONFIG = {
     accent: '#f97316',
     secondary: '#e11d48',
     image: '/themes/sunset-bg.jpg',
-    bgBase: 'bg-[#0c0608]',
+    canvas: '#411720',
+    paper: '#fff0db',
+    lightAccent: '#a54114',
   },
   rose: {
     id: 'rose',
@@ -32,7 +38,9 @@ export const THEME_CONFIG = {
     accent: '#ec4899',
     secondary: '#a855f7',
     image: '/themes/rose-bg.jpg',
-    bgBase: 'bg-[#0e040a]',
+    canvas: '#3c1130',
+    paper: '#fce8f3',
+    lightAccent: '#9b2468',
   },
   ocean: {
     id: 'ocean',
@@ -40,7 +48,9 @@ export const THEME_CONFIG = {
     accent: '#0ea5e9',
     secondary: '#14b8a6',
     image: '/themes/ocean-bg.jpg',
-    bgBase: 'bg-[#020a14]',
+    canvas: '#082a42',
+    paper: '#e0f5ff',
+    lightAccent: '#075f90',
   },
   minimal: {
     id: 'minimal',
@@ -48,7 +58,9 @@ export const THEME_CONFIG = {
     accent: '#d4d4d8',
     secondary: '#71717a',
     image: '/themes/minimal-bg.jpg',
-    bgBase: 'bg-[#09090b]',
+    canvas: '#292938',
+    paper: '#f0eef3',
+    lightAccent: '#505066',
   },
 };
 
@@ -58,9 +70,8 @@ function ThemeBackground({ theme = 'midnight' }) {
   return (
     <div
       key={current.id}
-      className={`room-ambient ${current.bgBase}`}
+      className="room-ambient"
       data-theme={current.id}
-      style={{ '--ambient-accent': current.accent }}
       aria-hidden="true"
     >
       <img src={current.image} alt="" className="room-ambient-image" />

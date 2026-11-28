@@ -116,6 +116,7 @@ export class RoomStore {
       ready: p.ready,
       buffering: p.buffering,
       reportedPositionMs: p.reportedPositionMs,
+      positionReportedAtMs: p.positionReportedAtMs || null,
       driftMs: p.driftMs,
       joinedAtMs: p.joinedAtMs,
     }));
@@ -173,7 +174,7 @@ export class RoomStore {
       hostGraceTimer: null,
       processedCommands: new Set(),
       settings: {
-        allowGuestQueue: false,
+        allowGuestQueue: true,
         allowGuestControl: false,
         requireApproval: false,
         theme: 'midnight',
@@ -466,6 +467,7 @@ export class RoomStore {
       room.hostGraceTimer = setTimeout(() => {
         const current = this.getRoom(room.code);
         if (!current) return;
+        current.hostGraceTimer = null;
         const host = current.participants.get(participantId);
         if (host && !host.connected) {
           // E-01/I-02: auto-promote the remaining guest to host when the host
@@ -475,12 +477,10 @@ export class RoomStore {
             (pp) => pp.role === 'guest' && pp.connected
           );
           if (guest) {
-            host.role = 'guest';
             guest.role = 'host';
-          }
-
-          // Pause playback if it was playing
-          if (current.playback.playbackState === 'playing') {
+            current.participants.delete(host.id);
+            this.tokenIndex.delete(host.sessionToken);
+          } else if (current.playback.playbackState === 'playing') {
             const now = this._now();
             current.playback.anchorPositionMs = this._computeCurrentPositionMs(current, now);
             current.playback.anchorServerTimeMs = now;
@@ -488,7 +488,7 @@ export class RoomStore {
             current.playback.playbackState = 'paused';
           }
           this._bumpVersion(current);
-          if (onHostGraceExpired) onHostGraceExpired(current);
+          if (onHostGraceExpired) onHostGraceExpired(current, guest);
         }
       }, this.hostGraceMs);
     }
@@ -632,7 +632,10 @@ export class RoomStore {
 
     if (typeof status.ready === 'boolean') p.ready = status.ready;
     if (typeof status.buffering === 'boolean') p.buffering = status.buffering;
-    if (typeof status.reportedPositionMs === 'number') p.reportedPositionMs = status.reportedPositionMs;
+    if (typeof status.reportedPositionMs === 'number') {
+      p.reportedPositionMs = status.reportedPositionMs;
+      p.positionReportedAtMs = this._now();
+    }
     if (typeof status.driftMs === 'number') p.driftMs = status.driftMs;
 
     let autoAdvanced = false;
@@ -733,6 +736,7 @@ export class RoomStore {
     room.stats.tracksPlayed += 1;
     for (const p of room.participants.values()) {
       p.reportedPositionMs = 0;
+      p.positionReportedAtMs = null;
       p.driftMs = 0;
     }
   }

@@ -40,7 +40,7 @@ import { resolveNowPlayingDurationSec } from '../utils/playbackSync';
 import { useRoom } from '../context/RoomContext';
 import { searchMusicBackend } from '../services/apiClient';
 import { resolveYouTubeTrack, searchRealSongs } from '../utils/artworkApi';
-import { getStoredSpotifyAuth } from '../utils/spotifyAuth';
+import { canUseSpotify, getStoredSpotifyAuth } from '../utils/spotifyAuth';
 import AudioVisualizerCanvas from './AudioVisualizerCanvas';
 import SpotifyConnectModal from './SpotifyConnectModal';
 import RoomLobby from './RoomLobby';
@@ -48,6 +48,7 @@ import ThemeBackground, { THEME_CONFIG } from './ThemeBackground';
 import './RoomView.css';
 import './RoomDesktop.css';
 import './RoomGlass.css';
+import { getHomeTheme } from '../utils/appearance';
 
 const THEME_STYLES = THEME_CONFIG;
 
@@ -69,7 +70,7 @@ const REACTION_EMOJIS = ['❤️', '🔥', '🎵', '😊', '✨', '😭'];
 // so the add is retried once and the raw lookup error is never shown.
 const MEMBERSHIP_ERROR_CODES = ['NOT_IN_ROOM', 'PARTICIPANT_NOT_FOUND', 'UNAUTHORIZED'];
 
-export default function RoomView({ isDemo = false, onLeave, demoTrack = null, demoState = null, onDemoStateChange }) {
+export default function RoomView({ isDemo = false, onLeave, demoTrack = null, demoState = null, onDemoStateChange, appearance = getHomeTheme() }) {
   const {
     roomState,
     session,
@@ -262,6 +263,8 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
   const audioUnlocked = isDemo ? demoUnlocked : realAudioUnlocked;
   const currentTrack = isDemo ? demoQueue[demoIdx] || demoQueue[0] : realTrack;
   const hasVideo = !isDemo && mySource === 'youtube' && Boolean(currentTrack);
+  const spotifyAuth = getStoredSpotifyAuth();
+  const spotifyAvailable = isDemo || canUseSpotify(spotifyAuth);
   const usesSpotify = mySource === 'spotify' || mySource === 'audio';
   const queue = isDemo
     ? demoQueue.map((t, i) => ({ queueItemId: `demo-${i}`, track: t, addedByName: 'Demo' }))
@@ -287,6 +290,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
   // the track on every change) over the track's stored durationSec — the
   // UI's currentTrack still points at the PREVIOUS track until queue:updated
   // lands, so durationSec flashed the old track's length after each switch.
+  const durationKnown = roomState?.playback?.durationMs > 0 || currentTrack?.durationSec > 0;
   const durationSec = resolveNowPlayingDurationSec({
     trackDurationSec: currentTrack?.durationSec,
     playbackDurationMs: roomState?.playback?.durationMs,
@@ -560,7 +564,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
       setDemoSource(nextSource);
       return;
     }
-    if (nextSource === 'spotify' && !getStoredSpotifyAuth()?.accessToken) {
+    if (nextSource === 'spotify' && !spotifyAvailable) {
       setShowSpotifyModal(true);
       return;
     }
@@ -746,12 +750,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
       title,
       artist,
       album: 'YouTube',
-      // Duration is unknown from oEmbed. The production backend (pre-PR #4)
-      // requires durationSec to be a number, so send 210 as a placeholder;
-      // the player reports the real duration via player:duration as soon as
-      // the track starts playing, which corrects it (N-02). The PR #4
-      // backend accepts null here, but a number works on both.
-      durationSec: 210,
+      durationSec: null,
       coverImage,
       youtubeId: videoId,
       sourceAttribution: 'YouTube (oEmbed)',
@@ -763,6 +762,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
   const handleAddTrack = async (track) => {
     const trackPayload = {
       ...track,
+      durationSec: track.durationSec > 0 ? track.durationSec : null,
       dedication: dedication.trim() || undefined,
     };
     if (isDemo) {
@@ -906,6 +906,8 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
   };
   const syncLabel = isDemo
     ? 'Simulated'
+    : connectionStatus === 'reconnecting'
+      ? 'Reconnecting…'
     : ctxSyncStatus
       ? { waiting: 'Waiting for partner', buffering: 'Buffering', 'in-sync': 'In sync', paused: 'Paused', syncing: 'Syncing', error: 'Playback error' }[ctxSyncStatus] || ctxSyncStatus
       : partnerParticipant ? roomState?.lifecycleState || connectionStatus : 'Waiting for partner';
@@ -933,32 +935,44 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
     isSelf: true,
     connected: isDemo || connectionStatus === 'connected',
   }];
-  if (isDemo || partnerParticipant) {
-    lobbyParticipants.push(isDemo ? {
+  if (isDemo) {
+    lobbyParticipants.push({
       id: 'demo-partner',
       name: isHost ? 'Demo guest' : 'Demo host',
       role: isHost ? 'guest' : 'host',
       source: demoPartnerSource,
       connected: true,
       detail: `${isHost ? 'Following' : 'Leading'} at ${formatTime(currentSec)}`,
-    } : {
-      ...partnerParticipant,
-      connected: partnerConnected,
-      detail: partnerConnected
-        ? `${partnerParticipant.ready ? 'Ready' : 'Loading'} · Reported ${formatTime(
-            Math.round((partnerParticipant.reportedPositionMs || 0) / 1000)
-          )}`
-        : null,
     });
+  } else {
+    for (const participant of roomState?.participants || (partnerParticipant ? [partnerParticipant] : [])) {
+      if (participant.id === session?.participantId) continue;
+      const connected = participant.id === partnerParticipant?.id ? partnerConnected : participant.connected;
+      const position = participant.positionReportedAtMs
+        ? ` · Reported ${formatTime(Math.round(participant.reportedPositionMs / 1000))}`
+        : '';
+      lobbyParticipants.push({
+        ...participant,
+        connected,
+        detail: connected ? `${participant.ready ? 'Ready' : 'Loading'}${position}` : null,
+      });
+    }
   }
 
-  const progressPct = Math.min(100, (displaySec / Math.max(1, durationSec)) * 100);
+  const progressPct = durationKnown ? Math.min(100, (displaySec / durationSec) * 100) : 0;
 
   return (
     <div
-      className={`duet-room relative min-h-screen overflow-x-hidden text-white transition-colors duration-700 ${themeConfig.bgBase}`}
+      className="duet-room relative min-h-screen overflow-x-hidden"
       data-compact={isMobileLayout}
-      style={{ '--room-accent': themeConfig.accent }}
+      data-appearance={appearance}
+      style={{
+        '--room-accent': themeConfig.accent,
+        '--room-secondary': themeConfig.secondary,
+        '--room-canvas': themeConfig.canvas,
+        '--room-paper': themeConfig.paper,
+        '--room-light-accent': themeConfig.lightAccent,
+      }}
     >
       {/* Theme Living Ambient Stage */}
       <ThemeBackground theme={theme} />
@@ -1603,6 +1617,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                     type="button"
                     aria-pressed={theme === option.id}
                     disabled={!isDemo && !canControl}
+                    style={{ '--swatch-accent': option.accent, '--swatch-secondary': option.secondary, '--swatch-canvas': option.canvas }}
                     onClick={() => {
                       changeTheme(option.id);
                       setShowThemes(false);
@@ -1611,10 +1626,10 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                   >
                     <span
                       className="room-theme-swatch"
-                      style={{ backgroundColor: option.accent, backgroundImage: `url(/themes/${option.id}-thumb.webp)` }}
+                      style={{ '--swatch-image': `url(/themes/${option.id}-thumb.webp)` }}
                       aria-hidden="true"
                     />
-                    <span>{option.name}</span>
+                    <span className="room-theme-name">{option.name}</span>
                     {theme === option.id && <Check size={14} aria-hidden="true" />}
                   </button>
                 ))}
@@ -1645,8 +1660,8 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                       usesSpotify || (isDemo && mySource === 'local') ? 'bg-emerald-500 text-zinc-950' : 'text-zinc-300 hover:text-white'
                     }`}
                   >
-                    <span className="block">Audio Only</span>
-                    <span className="block text-[10px]">Spotify Premium</span>
+                    <span className="block">{spotifyAvailable ? 'Audio Only' : spotifyAuth?.accessToken ? 'Manage Spotify' : 'Set up Spotify'}</span>
+                    <span className="block text-[10px]">{spotifyAvailable ? 'Spotify Premium' : spotifyAuth?.accessToken ? 'Premium required' : 'Client ID + Premium'}</span>
                   </button>
                 </div>
               </div>
@@ -1704,7 +1719,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                         )}
                       </div>
 
-                      <div className="room-track-details w-full flex-1 text-center sm:text-left">
+                      <div key={currentTrack.id} className="room-track-details w-full flex-1 text-center sm:text-left">
                         <span className={`room-source-badge mb-2 inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[10px] font-bold tracking-wider uppercase ${
                           usesSpotify
                             ? 'border-emerald-500/30 bg-emerald-500/15 text-emerald-300'
@@ -1727,7 +1742,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                   )}
 
                   {!isDemo && mySource === 'youtube' && (
-                    <div className="room-video-details flex flex-wrap items-center justify-between gap-2">
+                    <div key={currentTrack.id} className="room-video-details flex flex-wrap items-center justify-between gap-2">
                       <div className="min-w-0">
                         <h2 className="room-track-title font-display text-xl font-bold break-words text-white">{currentTrack.title}</h2>
                         <p className="text-sm text-zinc-400">{currentTrack.artist}</p>
@@ -1757,24 +1772,24 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                     type="range"
                     min={0}
                     max={durationSec}
-                    value={displaySec}
-                    disabled={!canControl}
+                    value={durationKnown ? Math.min(durationSec, displaySec) : 0}
+                    disabled={!canControl || !durationKnown}
                     onChange={handleSeek}
                     onPointerUp={() => flushSeek()}
                     onMouseUp={() => flushSeek()}
                     onTouchEnd={() => flushSeek()}
                     aria-label="Track progress"
                     className={`room-range h-1.5 w-full appearance-none rounded-full accent-white ${
-                      canControl ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'
+                      canControl && durationKnown ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'
                     }`}
                     style={{
                       '--room-range-fill': `${progressPct}%`,
-                      background: `linear-gradient(to right, ${themeConfig.accent} ${progressPct}%, rgba(255,255,255,0.15) ${progressPct}%)`,
+                      background: `linear-gradient(to right, ${themeConfig.accent} ${progressPct}%, var(--room-edge) ${progressPct}%)`,
                     }}
                   />
                   <div className="mt-2 flex justify-between font-mono text-xs font-medium text-zinc-500">
                     <span>{formatTime(displaySec)}</span>
-                    <span>{formatTime(durationSec)}</span>
+                    <span>{durationKnown ? formatTime(durationSec) : '–:––'}</span>
                   </div>
                 </div>
               )}
@@ -1942,6 +1957,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                 </div>
               </div>
 
+              <div key={activeTab} className="room-activity-content">
               {activeTab === 'lobby' && (
                 <RoomLobby
                   participants={lobbyParticipants}
@@ -2018,14 +2034,21 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                       <div key={track.id} className="room-search-result flex items-center justify-between gap-3 rounded-2xl border border-white/5 p-2.5 hover:bg-white/[0.03]">
                         <div className="flex min-w-0 items-center gap-3">
                           {track.coverImage ? (
-                            <img src={track.coverImage} alt="" className="h-11 w-11 shrink-0 rounded-xl object-cover" />
+                            <img
+                              src={track.coverImage}
+                              alt=""
+                              className="h-11 w-11 shrink-0 rounded-xl object-cover"
+                              onError={({ currentTarget }) => {
+                                if (!currentTarget.src.endsWith('/cover-soul.jpg')) currentTarget.src = '/cover-soul.jpg';
+                              }}
+                            />
                           ) : (
                             <div className={`h-11 w-11 shrink-0 rounded-xl bg-gradient-to-br ${track.coverGradient || 'from-violet-600 to-rose-500'}`} />
                           )}
                           <div className="min-w-0">
                             <p className="truncate text-sm font-bold text-white">{track.title}</p>
                             <p className="truncate text-xs text-zinc-500">
-                              {track.artist} • {formatTime(track.durationSec)}
+                              {track.artist} • {track.durationSec > 0 ? formatTime(track.durationSec) : '–:––'}
                               {track.sourceAttribution ? ` • ${track.sourceAttribution}` : ''}
                             </p>
                           </div>
@@ -2101,7 +2124,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                               {track.title}
                             </span>
                             <span className={`block truncate text-xs ${isCurr ? 'text-zinc-600' : 'text-zinc-500'}`}>
-                              {track.artist} • {formatTime(track.durationSec)}
+                              {track.artist} • {track.durationSec > 0 ? formatTime(track.durationSec) : '–:––'}
                               {item.addedByName ? ` • by ${item.addedByName}` : ''}
                             </span>
                           </span>
@@ -2224,6 +2247,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                   </form>
                 </div>
               )}
+              </div>
             </div>
           </section>
         </div>

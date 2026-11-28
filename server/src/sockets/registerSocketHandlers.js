@@ -766,14 +766,17 @@ export function registerSocketHandlers(io, store, env) {
     const handleDisconnect = (roomCode, participantId) => {
       // E-01: on host grace expiry, auto-promote guest and broadcast the
       // updated state (including the role change) so the guest's UI updates.
-      const emitGraceExpiredState = (expiredRoom) => {
+      const emitGraceExpiredState = (expiredRoom, promotedGuest) => {
         const serialized = store.serializeRoom(expiredRoom);
         io.to(expiredRoom.code).emit('room:state', serialized);
         io.to(expiredRoom.code).emit('playback:state', serialized.playback);
         // E-01: notify the new host (promoted guest) about the role change.
-        io.to(expiredRoom.code).emit('host:promoted', {
-          reason: 'The host disconnected. You are now the host.',
-        });
+        if (promotedGuest?.socketId) {
+          io.to(promotedGuest.socketId).emit('host:promoted', {
+            participantId: promotedGuest.id,
+            reason: 'The host disconnected. You are now the host.',
+          });
+        }
       };
       const room = store.markDisconnected(
         roomCode,
