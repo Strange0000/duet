@@ -37,6 +37,7 @@ import {
   X,
 } from 'lucide-react';
 import { INITIAL_TRACKS, SEARCH_CATALOG, formatTime } from '../data/mockTracks';
+import { usesAppleMobilePlayback } from '../players/YouTubePlayer';
 import { resolveNowPlayingDurationSec } from '../utils/playbackSync';
 import { useRoom } from '../context/RoomContext';
 import { searchMusicBackend } from '../services/apiClient';
@@ -318,6 +319,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
   // and Pause is the honest action. With no live local state yet
   // (idle / ready / context without playerState), fall back to the server.
   const serverPlaying = !isDemo && roomState?.playback?.playbackState === 'playing';
+  const nativeAppleStart = hasVideo && usesAppleMobilePlayback() && !audioUnlocked;
   const isPlaying = isDemo
     ? demoPlaying
     : ctxPlayerState === 'playing' || ctxPlayerState === 'buffering'
@@ -1590,7 +1592,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
         )}
 
         {/* Mobile Browser Autoplay Unlock Banner */}
-        {!audioUnlocked && (
+        {!audioUnlocked && !nativeAppleStart && (
           <div className="room-unlock mb-6 flex flex-col items-start justify-between gap-4 rounded-2xl border border-violet-500/30 bg-violet-500/10 p-4 sm:flex-row sm:items-center">
             <div className="flex items-center gap-3">
               <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-violet-600 text-white">
@@ -1756,8 +1758,15 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
               {currentTrack && (
                 <div className="room-stage relative mt-6 space-y-5">
                   {hasVideo && (
-                    <div className="room-video overflow-hidden rounded-2xl border border-white/10 bg-black">
-                      <div ref={ytContainerRef} className="room-video-frame relative aspect-video min-h-[200px] w-full" />
+                    <div>
+                      {nativeAppleStart && serverPlaying && (
+                        <p role="status" className="mb-2 rounded-xl border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-sm font-semibold text-white">
+                          Tap Play inside the YouTube video to join playback.
+                        </p>
+                      )}
+                      <div className="room-video overflow-hidden rounded-2xl border border-white/10 bg-black">
+                        <div ref={ytContainerRef} className="room-video-frame relative aspect-video min-h-[200px] w-full" />
+                      </div>
                     </div>
                   )}
 

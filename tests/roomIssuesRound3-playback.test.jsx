@@ -291,6 +291,45 @@ describe('YouTubePlayer (R1 first Play, R5 stale duration)', () => {
     return el;
   }
 
+  it('does not reload or seek a video that is already buffering on a slow connection', async () => {
+    const player = new YouTubePlayer();
+    const container = makeContainer();
+    await initPlayer(player, container);
+    await player.loadTrack(MIDNIGHT_CITY, 0, true);
+    capturedEvents.onStateChange({ data: window.YT.PlayerState.BUFFERING });
+
+    expect(player.retrySlowPlayback()).toBe(false);
+    expect(fakePlayer.loadVideoById).toHaveBeenCalledTimes(1);
+    expect(fakePlayer.playVideo).not.toHaveBeenCalled();
+    expect(fakePlayer.seekTo).not.toHaveBeenCalled();
+
+    capturedEvents.onStateChange({ data: window.YT.PlayerState.CUED });
+    expect(player.retrySlowPlayback()).toBe(true);
+    expect(fakePlayer.playVideo).toHaveBeenCalledTimes(1);
+    expect(fakePlayer.loadVideoById).toHaveBeenCalledTimes(1);
+    await player.destroy();
+    container.remove();
+  });
+
+  it('ignores late playback events from a replaced iframe', async () => {
+    const onEnded = vi.fn();
+    const player = new YouTubePlayer({ onEnded });
+    const container = makeContainer();
+    await initPlayer(player, container);
+    const oldEvents = capturedEvents;
+
+    const reloading = player.reloadPlayer();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    capturedEvents.onReady();
+    await expect(reloading).resolves.toBe(true);
+    oldEvents.onStateChange({ data: window.YT.PlayerState.ENDED });
+
+    expect(onEnded).not.toHaveBeenCalled();
+    expect(await player.getState()).toBe('ready');
+    await player.destroy();
+    container.remove();
+  });
+
   it('restarts a stalled video at the latest room position', async () => {
     const player = new YouTubePlayer();
     const container = makeContainer();

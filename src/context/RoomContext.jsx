@@ -10,7 +10,7 @@ import React, {
 import { INITIAL_TRACKS } from '../data/mockTracks';
 import { LocalAudioPlayer } from '../players/LocalAudioPlayer';
 import { SpotifyPlayer } from '../players/SpotifyPlayer';
-import { preloadYouTubeAPI, YouTubePlayer } from '../players/YouTubePlayer';
+import { preloadYouTubeAPI, usesAppleMobilePlayback, YouTubePlayer } from '../players/YouTubePlayer';
 import { emitAck, generateCommandId, getSocket } from '../services/socketClient';
 import { backgroundAudio } from '../utils/backgroundAudio';
 import { ClockSync } from '../utils/clockSync';
@@ -167,6 +167,7 @@ export function RoomProvider({ children }) {
   // R4: last player position seen by the 1s poll, so a "buffering"/"paused"
   // reading can be overruled when the position is in fact advancing.
   const lastPlayerPositionRef = useRef(0);
+  const advancingYoutubeSamplesRef = useRef(0);
   // R1: first-play stall watchdog — one retry, then a real error instead of
   // spinning on "Loading…" forever.
   const playWatchdogTimerRef = useRef(null);
@@ -396,6 +397,8 @@ export function RoomProvider({ children }) {
       if (!player || !playback || !track) return;
 
       const isLocalAudio = player instanceof LocalAudioPlayer;
+      const isYouTube = player instanceof YouTubePlayer;
+      const appleMobile = isYouTube && usesAppleMobilePlayback();
       if (isLocalAudio && playback.durationMs > 0) player.setDuration(playback.durationMs);
 
       const trackKey = `${track.id}:${playback.trackVersion}`;
@@ -447,34 +450,43 @@ export function RoomProvider({ children }) {
         playWatchdogTimerRef.current = null;
       }
       playWatchdogAttemptRef.current = 0;
+      advancingYoutubeSamplesRef.current = 0;
 
-      // Retry once at the current room position if the media clock has stopped.
+      // Safari gets a longer window and a retry that leaves its buffer intact.
       const armStallWatchdog = (anchorMs) => {
         if (playWatchdogTimerRef.current || playWatchdogAttemptRef.current >= 2) return;
         const check = async () => {
           playWatchdogTimerRef.current = null;
           const state = roomStateRef.current?.playback;
-          if (!audioUnlockedRef.current || playerRef.current !== player ||
-              state?.playbackState !== 'playing' || lastAppliedPlaybackRef.current !== signature) return;
+          if ((!appleMobile && !audioUnlockedRef.current) || playerRef.current !== player ||
+              state?.playbackState !== 'playing' ||
+              computePlaybackSignature(track, state) !== signature ||
+              lastAppliedPlaybackRef.current !== signature) return;
 
           const [playerStatus, position] = await Promise.all([
             player.getState().catch(() => 'idle'),
             player.getPosition().catch(() => anchorMs),
           ]);
           if (playerRef.current !== player || lastAppliedPlaybackRef.current !== signature ||
-              !audioUnlockedRef.current || playerStatus === 'error' || position - anchorMs >= 500) return;
+              computePlaybackSignature(track, roomStateRef.current?.playback) !== signature ||
+              (!appleMobile && !audioUnlockedRef.current) || playerStatus === 'error' ||
+              (playerStatus === 'playing' && position - anchorMs >= 500)) return;
 
           if (playWatchdogAttemptRef.current === 0) {
             playWatchdogAttemptRef.current = 1;
-            if (player instanceof YouTubePlayer) {
+            if (appleMobile) {
+              if (audioUnlockedRef.current) player.retrySlowPlayback();
+              anchorMs = position;
+            } else if (isYouTube) {
               anchorMs = computeExpectedPositionMs(roomStateRef.current?.playback, clockSyncRef.current.estimateServerNowMs());
               player.restartPlayback(anchorMs);
             } else {
               await player.play().catch(() => {});
             }
-            if (playerRef.current === player && lastAppliedPlaybackRef.current === signature && audioUnlockedRef.current) {
+            if (playerRef.current === player && lastAppliedPlaybackRef.current === signature &&
+                (appleMobile || audioUnlockedRef.current)) {
               clearTimeout(playWatchdogTimerRef.current);
-              playWatchdogTimerRef.current = setTimeout(check, 7500);
+              playWatchdogTimerRef.current = setTimeout(check, appleMobile ? 12000 : 7500);
             }
             return;
           }
@@ -482,10 +494,12 @@ export function RoomProvider({ children }) {
           playWatchdogAttemptRef.current = 2;
           setPlayerError({
             code: 'PLAY_STALLED',
-            message: 'Playback is stalled. Try Reload player, or skip this track.',
+            message: appleMobile
+              ? 'YouTube is taking longer to start. Tap Play inside the video or choose Resume video here.'
+              : 'Playback is stalled. Try Reload player, or skip this track.',
           });
         };
-        playWatchdogTimerRef.current = setTimeout(check, 5000);
+        playWatchdogTimerRef.current = setTimeout(check, appleMobile ? 12000 : 5000);
       };
       monitorPlaybackRef.current = playback.playbackState === 'playing' ? armStallWatchdog : null;
 
@@ -494,6 +508,9 @@ export function RoomProvider({ children }) {
 
       if (loadedTrackKeyRef.current !== trackKey) {
         loadedTrackKeyRef.current = trackKey;
+        lastCorrectionAtRef.current = 0;
+        consecutiveDriftRef.current = 0;
+        lastPlayerPositionRef.current = expectedMs;
         realDurationRef.current = 0;
         lastReportedDurationRef.current = 0;
         setPlayerError(null);
@@ -633,7 +650,10 @@ export function RoomProvider({ children }) {
             }
             setPlayerError((error) => error?.code === 'PLAY_STALLED' ? error : null);
           }
-          if (state === 'buffering' && audioUnlockedRef.current) {
+          if (state !== 'playing') advancingYoutubeSamplesRef.current = 0;
+          if (state === 'buffering' && (
+            audioUnlockedRef.current || (wantsYouTube && usesAppleMobilePlayback())
+          )) {
             monitorPlaybackRef.current?.(lastPlayerPositionRef.current);
           }
           if (
@@ -1096,14 +1116,24 @@ export function RoomProvider({ children }) {
         'youtube';
       if (playerRef.current !== player || roomStateRef.current?.playback?.trackVersion !== st.playback.trackVersion) return;
       const expectedId = expectedMediaId(curTrack, mySource);
-      if (effectivePlayerState === 'buffering' && st.playback.playbackState === 'playing') {
-        monitorPlaybackRef.current?.(actualMs);
+      const youtube = player instanceof YouTubePlayer;
+      const advancing = (youtube ? observedPlayerState : effectivePlayerState) === 'playing' &&
+        positionAdvanced && (!expectedId || expectedId === loadedId);
+      if (youtube) {
+        advancingYoutubeSamplesRef.current = advancing ? advancingYoutubeSamplesRef.current + 1 : 0;
       }
-      if (effectivePlayerState === 'playing' && positionAdvanced && (!expectedId || expectedId === loadedId)) {
+      const appleMobile = youtube && usesAppleMobilePlayback();
+      const stablePlayback = appleMobile
+        ? advancingYoutubeSamplesRef.current >= 2
+        : advancing;
+      if (stablePlayback) {
         clearTimeout(playWatchdogTimerRef.current);
         playWatchdogTimerRef.current = null;
         playWatchdogAttemptRef.current = 0;
         setPlayerError((error) => error?.code === 'PLAY_STALLED' ? null : error);
+      } else if (st.playback.playbackState === 'playing' &&
+                 (effectivePlayerState === 'buffering' || (youtube && observedPlayerState === 'playing'))) {
+        monitorPlaybackRef.current?.(actualMs);
       }
 
       // N-02/B2: read the real duration every tick; report it to the server
@@ -1169,6 +1199,7 @@ export function RoomProvider({ children }) {
         expectedMs,
         actualMs,
         lastCorrectionAtMs: lastCorrectionAtRef.current,
+        minSeekIntervalMs: appleMobile ? 8000 : 0,
         consecutiveModerateCount: consecutiveDriftRef.current,
         playerDurationMs: realDurationMs > 0 ? realDurationMs : realDurationRef.current || null,
       });
@@ -1184,7 +1215,7 @@ export function RoomProvider({ children }) {
         // not count a correction. (A player whose position is advancing is
         // 'playing' by the overrule above, so real drift still corrects.)
         const safeToSeek = player instanceof YouTubePlayer
-          ? observedPlayerState === 'playing' && positionAdvanced && expectedId && loadedId === expectedId
+          ? stablePlayback && expectedId && loadedId === expectedId
           : playerHasStarted(effectivePlayerState);
         if (!safeToSeek) {
           setSyncMetrics((prev) => ({
@@ -1195,6 +1226,7 @@ export function RoomProvider({ children }) {
           }));
         } else {
           lastCorrectionAtRef.current = Date.now();
+          advancingYoutubeSamplesRef.current = 0;
           await player.seek(evaluation.targetMs);
           setSyncMetrics((prev) => ({
             ...prev,

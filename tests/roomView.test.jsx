@@ -126,6 +126,31 @@ describe('RoomView renders a real room', () => {
     container.remove();
   });
 
+  it('directs an iPhone guest to the native YouTube Play control', () => {
+    const ctx = makeCtx({ audioUnlocked: false, session: { participantId: 'guest-1', role: 'guest' } });
+    ctx.roomState.playback.playbackState = 'playing';
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    document.body.appendChild(container);
+    const original = Object.getOwnPropertyDescriptor(navigator, 'userAgent');
+    Object.defineProperty(navigator, 'userAgent', { configurable: true, value: 'Mozilla/5.0 (iPhone) AppleWebKit Safari' });
+
+    try {
+      act(() => root.render(
+        <RoomContext.Provider value={ctx}>
+          <RoomView onLeave={() => {}} />
+        </RoomContext.Provider>
+      ));
+      expect(container.querySelector('.room-stage').textContent).toContain('Tap Play inside the YouTube video');
+      expect(container.textContent).not.toContain('Tap to Join Audio');
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+      if (original) Object.defineProperty(navigator, 'userAgent', original);
+      else delete navigator.userAgent;
+    }
+  });
+
   it('starts YouTube in the mobile Play tap and rolls back if the room rejects it', async () => {
     const cancelLocalStart = vi.fn();
     const startYouTubeFromGesture = vi.fn(() => cancelLocalStart);

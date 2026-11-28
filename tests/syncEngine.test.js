@@ -283,3 +283,9 @@ describe('Round 4: duration reporting + partner drift', () => {
     expect(resolvePlaybackStatus({ ...base, partnerDriftMs: null })).toBe('in-sync');
   });
 });
+
+it('spaces out repeated seeks for a device with a slower buffer', () => {
+  const sample = { expectedMs: 20000, actualMs: 17000, lastCorrectionAtMs: 1000, minSeekIntervalMs: 8000 };
+  expect(evaluateDriftCorrection({ ...sample, nowMs: 6000 }).action).toBe('cooldown');
+  expect(evaluateDriftCorrection({ ...sample, nowMs: 9000 }).action).toBe('seek');
+});
