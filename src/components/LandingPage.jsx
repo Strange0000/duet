@@ -407,6 +407,15 @@ export default function LandingPage({
               fetchPriority="high"
               alt="Lavender and plum headphones on a smoked violet surface"
             />
+            <div className="home-hero-vinyl" aria-hidden="true">
+              <div className="home-hero-vinyl-disc" />
+            </div>
+            <div className="home-hero-notes" aria-hidden="true">
+              <span>♪</span>
+              <span>♫</span>
+              <span>♪</span>
+              <span>♫</span>
+            </div>
             <div className="home-hero-spectrum" aria-hidden="true">
               {[22, 38, 53, 29, 66, 44, 77, 48, 33, 58, 40, 23].map((height, index) => (
                 <i key={index} style={{ '--bar-height': `${height}%`, '--bar-delay': `${index * -90}ms` }} />
