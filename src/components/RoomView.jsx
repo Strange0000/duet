@@ -45,6 +45,8 @@ import SpotifyConnectModal from './SpotifyConnectModal';
 import RoomLobby from './RoomLobby';
 import ThemeBackground, { THEME_CONFIG } from './ThemeBackground';
 import './RoomView.css';
+import './RoomDesktop.css';
+import './RoomGlass.css';
 
 const THEME_STYLES = THEME_CONFIG;
 
@@ -924,6 +926,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
   return (
     <div
       className={`duet-room relative min-h-screen overflow-x-hidden text-white transition-colors duration-700 ${themeConfig.bgBase}`}
+      data-compact={isMobileLayout}
       style={{ '--room-accent': themeConfig.accent }}
     >
       {/* Theme Living Ambient Stage */}
@@ -1149,49 +1152,6 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
             </button>
           </div>
 
-          {/* Desktop theme controls */}
-          <div className="room-desktop-themes order-3 flex w-full flex-wrap items-center gap-1.5 pt-1 lg:order-none lg:w-auto lg:pt-0">
-            <Palette className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
-            <div className="flex flex-wrap items-center gap-1 rounded-full border border-white/[0.08] bg-black/40 p-0.5 backdrop-blur-md shadow-inner shadow-black/40">
-              {Object.keys(THEME_STYLES).map((t) => {
-                const conf = THEME_STYLES[t] || THEME_STYLES.midnight;
-                const isCurrent = theme === t;
-                return (
-                  <button
-                    key={t}
-                    onClick={() => changeTheme(t)}
-                    aria-pressed={isCurrent}
-                    disabled={!isDemo && !canControl}
-                    className={`group relative flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium capitalize transition-all duration-300 cursor-pointer ${
-                      isCurrent
-                        ? 'bg-white/15 text-white shadow-sm shadow-black/40 ring-1 ring-white/25 backdrop-blur-md'
-                        : 'text-zinc-400 hover:bg-white/[0.06] hover:text-zinc-200'
-                    }`}
-                    style={
-                      isCurrent
-                        ? {
-                            boxShadow: `0 0 16px ${conf.accent}33, inset 0 1px 0 rgba(255,255,255,0.2)`,
-                          }
-                        : undefined
-                    }
-                    title={canControl || isDemo ? `Switch theme to ${conf.name || t}` : 'The host chooses the room theme'}
-                  >
-                    <span
-                      className={`h-2 w-2 rounded-full transition-transform duration-300 ${
-                        isCurrent ? 'scale-110 shadow-sm' : 'opacity-70 group-hover:opacity-100'
-                      }`}
-                      style={{
-                        backgroundColor: conf.accent,
-                        boxShadow: isCurrent ? `0 0 8px ${conf.accent}` : undefined,
-                      }}
-                    />
-                    <span>{conf.name || t}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
           <div className="room-header-actions flex shrink-0 items-center gap-1.5 sm:gap-2">
             {!isDemo && (
               <button
@@ -1205,20 +1165,6 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                 <span className="hidden sm:inline">{copiedLink ? 'Copied!' : 'Copy Invite Link'}</span>
               </button>
             )}
-
-            {/* Sync Status */}
-            <button
-              onClick={() => setShowMetrics((m) => !m)}
-              className="room-desktop-sync inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-2 py-1 text-[11px] font-semibold text-emerald-400 sm:px-2.5 cursor-pointer"
-              title="Synchronization metrics"
-            >
-              <span className="relative flex h-1.5 w-1.5">
-                <span className="animate-pulse-ring absolute inline-flex h-full w-full rounded-full bg-emerald-400" />
-                <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-500" />
-              </span>
-              <span className="hidden sm:inline">{syncLabel}</span>
-              {!isDemo && partnerParticipant && <span className="text-emerald-400/80">{syncMetrics.rttMs}ms</span>}
-            </button>
 
             {!isDemo && (
               <div className="room-header-menu relative flex items-center gap-1.5" data-notifications-menu>
@@ -1561,7 +1507,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
           </div>
         )}
 
-        <div className="grid gap-4 sm:gap-6 lg:grid-cols-12 lg:items-start">
+        <div className="room-layout grid gap-4 sm:gap-6 lg:grid-cols-12 lg:items-start">
           {/* Left: Player */}
           <section className="room-listening min-w-0 space-y-4 sm:space-y-5 lg:col-span-7">
             <div className="room-player rounded-3xl border border-white/[0.08] bg-white/[0.03] p-4 shadow-2xl shadow-black/20 backdrop-blur-sm sm:p-8">
@@ -1585,6 +1531,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                     >
                       <span className="room-status-dot" data-status={ctxSyncStatus} aria-hidden="true" />
                       {syncLabel}
+                      {partnerParticipant && <span className="room-sync-rtt">{syncMetrics.rttMs} ms</span>}
                     </button>
                   )}
                 </div>
@@ -1607,7 +1554,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
               </div>
               <div
                 id="room-theme-options"
-                className="room-mobile-themes"
+                className="room-theme-options"
                 role="group"
                 aria-label="Room themes"
                 hidden={!showThemes}
@@ -1957,7 +1904,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                       }`}
                     >
                       <Icon className="h-3.5 w-3.5" aria-hidden="true" />
-                      {id === 'queue' ? `Queue (${queue.length})` : label}
+                      {label}
                       {badgeCount[id] > 0 && <span className="room-desktop-badge">{badgeCount[id]}</span>}
                     </button>
                   ))}

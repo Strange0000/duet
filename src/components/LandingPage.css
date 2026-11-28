@@ -1,0 +1,210 @@
+.duet-home {
+  color-scheme: dark;
+  --home-bg: #09090b;
+  --home-header: rgb(9 9 11 / 90%);
+  --home-surface: #18181b;
+  --home-ink: #fff;
+  --home-secondary: #d4d4d8;
+  --home-muted: #a1a1aa;
+  --home-subtle: #929099;
+  --home-action: #fff;
+  --home-action-hover: #e4e4e7;
+  --home-on-action: #09090b;
+  --home-soft: rgb(255 255 255 / 3%);
+  --home-fill: rgb(255 255 255 / 5%);
+  --home-fill-strong: rgb(255 255 255 / 10%);
+  --home-fill-active: rgb(255 255 255 / 20%);
+  --home-edge: rgb(255 255 255 / 8%);
+  --home-edge-strong: rgb(255 255 255 / 15%);
+  --home-track: #3f3f46;
+  --home-violet: #c4b5fd;
+  --home-red: #fda4af;
+  --home-green: #6ee7b7;
+  overflow-x: clip;
+  background: var(--home-bg);
+  color: var(--home-ink);
+}
+
+.duet-home[data-theme="light"],
+#root:has(.duet-home[data-theme="light"]) {
+  color-scheme: light;
+  --home-bg: #faf8fc;
+  --home-header: rgb(250 248 252 / 93%);
+  --home-surface: #fff;
+  --home-ink: #21172e;
+  --home-secondary: #40364c;
+  --home-muted: #594e64;
+  --home-subtle: #665b71;
+  --home-action: #301750;
+  --home-action-hover: #482870;
+  --home-on-action: #fff;
+  --home-soft: #f5f0f9;
+  --home-fill: #f0eaf5;
+  --home-fill-strong: #e9e1f1;
+  --home-fill-active: #e2d6ed;
+  --home-edge: #e6ddec;
+  --home-edge-strong: #d9cce3;
+  --home-track: #d9cee1;
+  --home-violet: #6740a1;
+  --home-red: #a52543;
+  --home-green: #17664f;
+}
+
+.duet-home :is(button, a, input):focus-visible {
+  outline: 2px solid var(--home-violet);
+  outline-offset: 3px;
+}
+
+.home-theme-toggle {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  flex: none;
+  place-items: center;
+  border: 1px solid var(--home-edge-strong);
+  border-radius: 0.75rem;
+  background: var(--home-fill);
+  color: var(--home-ink);
+  cursor: pointer;
+}
+
+.home-theme-toggle:hover {
+  background: var(--home-fill-strong);
+}
+
+.home-start { white-space: nowrap; }
+
+.home-start-short {
+  display: none;
+}
+
+.duet-home[data-theme="light"] .home-hero {
+  background: radial-gradient(ellipse at 50% 12%, #ebe1f7 0%, transparent 68%);
+}
+
+.duet-home[data-theme="light"] :is(.home-hero-background, .home-footer-art) {
+  display: none;
+}
+
+.duet-home[data-theme="light"] .home-hero-accent {
+  background: none;
+  color: var(--home-violet);
+  -webkit-text-fill-color: currentColor;
+  animation: none;
+}
+
+.duet-home[data-theme="light"] .home-hero-art {
+  max-width: 48rem;
+  margin-inline: auto;
+  background: #18111f;
+  box-shadow: 0 18px 45px rgb(43 23 62 / 16%);
+}
+
+.duet-home[data-theme="light"] :is(.home-hero-art, .home-source-art) > img {
+  mix-blend-mode: normal;
+}
+
+.duet-home[data-theme="light"] :is(.home-hero-art, .home-source-art) > .pointer-events-none {
+  display: none;
+}
+
+.duet-home[data-theme="light"] .home-source-art {
+  background: #17121c;
+}
+
+.duet-home .spotify-connect-panel {
+  max-height: calc(100dvh - 2rem);
+  overflow-y: auto;
+}
+
+.duet-home[data-theme="light"] .spotify-connect-panel {
+  border-color: var(--home-edge-strong);
+  background: var(--home-surface);
+  color: var(--home-ink);
+}
+
+.duet-home[data-theme="light"] .spotify-connect-panel :is(h3, label, strong, .text-white) {
+  color: var(--home-ink);
+}
+
+.duet-home[data-theme="light"] .spotify-connect-panel :is(.text-zinc-400, .text-zinc-500, .text-zinc-300) {
+  color: var(--home-muted);
+}
+
+.duet-home[data-theme="light"] .spotify-connect-panel :is(input, .bg-white\/5) {
+  border-color: var(--home-edge-strong);
+  background: var(--home-fill);
+}
+
+.duet-home[data-theme="light"] .spotify-connect-panel input::placeholder {
+  color: var(--home-subtle);
+}
+
+.duet-home[data-theme="light"] .spotify-connect-panel :is(.text-amber-200\/90, .text-amber-400) {
+  color: #794014;
+}
+
+.duet-home[data-theme="light"] .spotify-connect-panel :is(.text-emerald-300, .text-emerald-400) {
+  color: var(--home-green);
+}
+
+@media (max-width: 767px) {
+  .home-source-dropdown {
+    position: fixed;
+    inset: 60px 0.75rem auto auto;
+    max-width: calc(100vw - 1.5rem);
+  }
+}
+
+@media (max-width: 449px) {
+  .home-header > div {
+    padding-inline: 0.625rem;
+  }
+
+  .home-header-actions {
+    gap: 0.375rem;
+  }
+
+  .home-start-label {
+    display: none;
+  }
+
+  .home-start-short {
+    display: inline;
+  }
+}
+
+#root:has(.duet-home[data-theme="light"]) .duet-install-banner {
+  border-color: var(--home-edge-strong);
+  background: var(--home-surface);
+}
+
+#root:has(.duet-home[data-theme="light"]) .duet-install-banner :is(p, button:not(.bg-violet-600)) {
+  color: var(--home-ink);
+}
+
+#root:has(.duet-home[data-theme="light"]) .duet-install-banner button.bg-white\/5 {
+  border-color: var(--home-edge-strong);
+  background: var(--home-fill);
+}
+
+@media (max-width: 959px) {
+  .home-header nav {
+    display: none;
+  }
+}
+
+@media (max-width: 359px) {
+  .home-header > div > a > span:first-child {
+    width: 28px;
+    height: 28px;
+  }
+
+  .home-start {
+    padding-inline: 0.75rem;
+  }
+
+  .home-start > svg {
+    display: none;
+  }
+}
