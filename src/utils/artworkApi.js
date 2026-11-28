@@ -48,7 +48,7 @@ export async function searchRealSongs(query, limit = 8) {
       title: item.trackName,
       artist: item.artistName,
       album: item.collectionName || 'Single',
-      durationSec: Math.max(30, Math.round((item.trackTimeMillis || 210000) / 1000)),
+      durationSec: item.trackTimeMillis > 0 ? Math.max(1, Math.round(item.trackTimeMillis / 1000)) : null,
       coverImage: item.artworkUrl100
         ? item.artworkUrl100.replace('100x100bb', '600x600bb')
         : null,

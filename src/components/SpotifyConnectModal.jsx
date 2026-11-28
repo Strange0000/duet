@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Check, Copy, ExternalLink, LogOut, X } from 'lucide-react';
 import {
+  canUseSpotify,
   getSpotifyClientId,
   getSpotifyRedirectUri,
   getStoredSpotifyAuth,
@@ -77,9 +78,9 @@ export default function SpotifyConnectModal({ open, onClose, onConnected, onDisc
                 <span className="font-semibold capitalize">
                   {auth.user?.product || 'unknown'}
                 </span>
-                {auth.user?.product && auth.user.product !== 'premium' && (
-                  <span className="ml-2 text-amber-300">
-                    (Premium required for browser playback)
+                {!canUseSpotify(auth) && (
+                  <span className="block text-amber-300">
+                    Spotify Premium is required for Audio Only. YouTube is available with a Free account.
                   </span>
                 )}
               </p>
@@ -93,11 +94,12 @@ export default function SpotifyConnectModal({ open, onClose, onConnected, onDisc
                 <LogOut className="h-3.5 w-3.5" /> Disconnect
               </button>
               <button
+                disabled={!canUseSpotify(auth)}
                 onClick={() => {
                   onConnected?.();
                   onClose();
                 }}
-                className="flex-1 rounded-full bg-emerald-500 py-2.5 text-xs font-bold text-zinc-950 hover:bg-emerald-400 cursor-pointer"
+                className="flex-1 rounded-full bg-emerald-500 py-2.5 text-xs font-bold text-zinc-950 hover:bg-emerald-400 enabled:cursor-pointer disabled:opacity-50"
               >
                 Use Spotify
               </button>
@@ -140,7 +142,7 @@ export default function SpotifyConnectModal({ open, onClose, onConnected, onDisc
                     setError('');
                   }}
                   placeholder="Paste your Spotify Client ID..."
-                  className="w-full rounded-xl border border-white/10 bg-zinc-950 px-3 py-2 font-mono text-xs text-white placeholder:text-zinc-600 focus:border-emerald-500/50 focus:outline-none"
+                  className="w-full rounded-xl border border-white/10 bg-zinc-950 px-3 py-2 font-mono spotify-client-id text-xs text-white placeholder:text-zinc-600 focus:border-emerald-500/50 focus:outline-none"
                 />
                 <div className="pt-1 text-[11px] text-zinc-500">
                   <div className="flex items-center justify-between gap-2">

@@ -4,60 +4,59 @@ let ytApiPromise = null;
 
 const YT_LOAD_TIMEOUT_MS = 15000;
 
-function loadYouTubeIframeAPI() {
+export function usesAppleMobilePlayback() {
+  if (typeof navigator === 'undefined') return false;
+  return /iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
+
+export function preloadYouTubeAPI() {
   if (typeof window === 'undefined') {
     return Promise.reject(new Error('YouTube API requires a browser environment'));
   }
-  if (window.YT && window.YT.Player) {
-    return Promise.resolve(window.YT);
-  }
+  if (window.YT?.Player) return Promise.resolve(window.YT);
   if (ytApiPromise) return ytApiPromise;
 
   ytApiPromise = new Promise((resolve, reject) => {
-    let settled = false;
-    const existingScript = document.querySelector('script[src="https://www.youtube.com/iframe_api"]');
-    const prevReady = window.onYouTubeIframeAPIReady;
-
+    const src = 'https://www.youtube.com/iframe_api';
+    const existingScript = document.querySelector(`script[src="${src}"]`);
+    const script = existingScript || document.createElement('script');
+    const previousReady = window.onYouTubeIframeAPIReady;
     const cleanup = () => {
       clearTimeout(timer);
       clearInterval(poll);
+      script.removeEventListener('error', fail);
+      if (window.onYouTubeIframeAPIReady === ready) {
+        window.onYouTubeIframeAPIReady = previousReady;
+      }
     };
-    const fail = (err) => {
-      if (settled) return;
-      settled = true;
+    const fail = () => {
       cleanup();
+      script.remove();
       ytApiPromise = null;
-      reject(err);
+      reject(new Error('Could not reach YouTube. Check your connection or video blockers, then try Reload player.'));
     };
     const succeed = () => {
-      if (settled) return;
-      if (!window.YT || !window.YT.Player) return;
-      settled = true;
+      if (!window.YT?.Player) return;
       cleanup();
       resolve(window.YT);
     };
-
-    // 15s timeout: the script tag may already exist (or be blocked by an
-    // ad-blocker) yet the API never loads — never hang forever (N-07).
-    const timer = setTimeout(
-      () => fail(new Error('YouTube player failed to load — check your connection or ad-blocker')),
-      YT_LOAD_TIMEOUT_MS
-    );
-    // Poll as well as waiting on the callback: if the script tag already
-    // exists but the ready callback never fires, the poll still notices.
-    const poll = setInterval(succeed, 250);
-
-    window.onYouTubeIframeAPIReady = () => {
-      if (typeof prevReady === 'function') prevReady();
-      succeed();
+    const ready = () => {
+      try {
+        previousReady?.();
+      } finally {
+        succeed();
+      }
     };
+    const timer = setTimeout(fail, YT_LOAD_TIMEOUT_MS);
+    const poll = setInterval(succeed, 250);
+    script.addEventListener('error', fail, { once: true });
+    window.onYouTubeIframeAPIReady = ready;
 
     if (!existingScript) {
-      const tag = document.createElement('script');
-      tag.src = 'https://www.youtube.com/iframe_api';
-      tag.async = true;
-      tag.onerror = () => fail(new Error('Failed to load YouTube IFrame API'));
-      document.head.appendChild(tag);
+      script.src = src;
+      script.async = true;
+      document.head.appendChild(script);
     }
   });
 
@@ -70,6 +69,7 @@ const YT_ERROR_MESSAGES = {
   100: 'This video was removed or marked private.',
   101: 'The video owner disabled playback on external sites.',
   150: 'The video owner disabled embedding for this track.',
+  153: 'YouTube could not verify this embedded player. Try Reload player.'
 };
 
 /**
@@ -80,6 +80,7 @@ export class YouTubePlayer extends BasePlayer {
   constructor(callbacks = {}) {
     super(callbacks);
     this.player = null;
+    this.iframeVersion = 0;
     this.containerEl = null;
     this.currentVideoId = null;
     this.state = 'idle';
@@ -143,7 +144,10 @@ export class YouTubePlayer extends BasePlayer {
   async initialize(containerEl) {
     if (!containerEl) throw new Error('Visible YouTube container element is required');
     this.containerEl = containerEl;
-    const YT = await loadYouTubeIframeAPI();
+    const version = ++this.iframeVersion;
+    const isCurrent = () => this.iframeVersion === version;
+    const YT = await preloadYouTubeAPI();
+    if (!isCurrent()) throw new Error('YouTube player was replaced');
 
     // Ensure mount node inside container
     containerEl.innerHTML = '';
@@ -158,6 +162,7 @@ export class YouTubePlayer extends BasePlayer {
       // with no error surfaced. Bound it so a hung init fails loudly and
       // the recovery can be retried / the "Reload player" control offered.
       const timer = setTimeout(() => {
+        if (isCurrent()) this.iframeVersion++;
         reject(new Error('YouTube player did not become ready'));
       }, this.readyTimeoutMs);
       this.player = new YT.Player(mountEl, {
@@ -174,6 +179,10 @@ export class YouTubePlayer extends BasePlayer {
         events: {
           onReady: () => {
             clearTimeout(timer);
+            if (!isCurrent()) {
+              reject(new Error('YouTube player was replaced'));
+              return;
+            }
             this.isReady = true;
             this.state = 'ready';
             this.callbacks.onReady?.();
@@ -198,55 +207,18 @@ export class YouTubePlayer extends BasePlayer {
             resolve();
           },
           onStateChange: (event) => {
-            const YTState = window.YT?.PlayerState;
-            if (!YTState) return;
-            // F1: while a load has failed, stray state changes (UNSTARTED /
-            // CUED / BUFFERING from the dead load) must not overwrite the
-            // 'error' state — otherwise the dedup treats the player as
-            // "already trying" and never retries, and the pill lies. Only
-            // PLAYING (recovered) and ENDED may pass through.
-            if (
-              this.playerFailed &&
-              event.data !== YTState.PLAYING &&
-              event.data !== YTState.ENDED
-            ) {
-              return;
-            }
-            if (event.data === YTState.PLAYING) {
-              this.state = 'playing';
-              this.hasPlayedVideoId = this.currentVideoId;
-              this.loadIssuedForVideoId = null;
-              // F1: a successful play clears the failure — a later error
-              // for this video gets a fresh recovery budget.
-              this.playerFailed = false;
-              this.failedVideoId = null;
-              this.recoveredVideoId = null;
-              this.failedCode = null;
-              this.failedIsEmbedBlocked = false;
-              this.callbacks.onStateChange?.('playing');
-            } else if (event.data === YTState.PAUSED) {
-              this.state = 'paused';
-              this.callbacks.onStateChange?.('paused');
-            } else if (event.data === YTState.BUFFERING) {
-              this.state = 'buffering';
-              this.callbacks.onStateChange?.('buffering');
-            } else if (event.data === YTState.CUED) {
-              // R1 (follow-up): a cued video is loaded but not started — the
-              // state the player sits in between cueVideoById and the first
-              // play(). Callers use it to tell "not started yet" from
-              // "started and buffering".
-              this.state = 'cued';
-              this.callbacks.onStateChange?.('cued');
-            } else if (event.data === YTState.UNSTARTED) {
-              this.state = 'unstarted';
-              this.callbacks.onStateChange?.('unstarted');
-            } else if (event.data === YTState.ENDED) {
-              this.state = 'ended';
-              this.callbacks.onStateChange?.('ended');
-              this.callbacks.onEnded?.();
-            }
+            if (!isCurrent()) return;
+            this.updateIframeState(event.data);
+          },
+          onAutoplayBlocked: () => {
+            if (!isCurrent()) return;
+            this.loadIssuedForVideoId = null;
+            this.state = 'cued';
+            this.callbacks.onStateChange?.('cued');
+            this.callbacks.onAutoplayBlocked?.();
           },
           onError: (event) => {
+            if (!isCurrent()) return;
             const code = event.data;
             const message = YT_ERROR_MESSAGES[code] || `YouTube player error (${code})`;
             const isEmbedBlocked = code === 101 || code === 150 || code === 100;
@@ -282,6 +254,36 @@ export class YouTubePlayer extends BasePlayer {
         },
       });
     });
+  }
+
+  updateIframeState(code) {
+    const codes = window.YT?.PlayerState;
+    if (!codes || typeof code !== 'number') return;
+    const state = code === codes.PLAYING ? 'playing'
+      : code === codes.PAUSED ? 'paused'
+        : code === codes.BUFFERING ? 'buffering'
+          : code === codes.CUED ? 'cued'
+            : code === codes.UNSTARTED ? 'unstarted'
+              : code === codes.ENDED ? 'ended' : null;
+    if (!state || state === this.state || (this.playerFailed && state !== 'playing')) return;
+
+    const loadedId = this.readLoadedVideoId();
+    if (this.currentVideoId && loadedId && loadedId !== this.currentVideoId &&
+        (state === 'playing' || state === 'paused' || state === 'ended')) return;
+    if (state === 'ended' && this.currentVideoId && this.hasPlayedVideoId !== this.currentVideoId) return;
+
+    this.state = state;
+    if (state === 'playing') {
+      this.hasPlayedVideoId = this.currentVideoId;
+      this.loadIssuedForVideoId = null;
+      this.playerFailed = false;
+      this.failedVideoId = null;
+      this.recoveredVideoId = null;
+      this.failedCode = null;
+      this.failedIsEmbedBlocked = false;
+    }
+    this.callbacks.onStateChange?.(state);
+    if (state === 'ended') this.callbacks.onEnded?.();
   }
 
   /**
@@ -320,6 +322,7 @@ export class YouTubePlayer extends BasePlayer {
       this.failedVideoId = null;
       this.failedCode = null;
       this.failedIsEmbedBlocked = false;
+      this.iframeVersion++;
       try {
         this.player?.destroy?.();
       } catch {
@@ -370,6 +373,7 @@ export class YouTubePlayer extends BasePlayer {
       const ok = await this.recoveringPromise;
       if (ok) return true;
     }
+    this.iframeVersion++;
     try {
       this.player?.destroy?.();
     } catch {
@@ -415,16 +419,16 @@ export class YouTubePlayer extends BasePlayer {
     const isSameVideo = this.currentVideoId === videoId;
     this.currentVideoId = videoId;
     this.targetStartPositionMs = startPositionMs;
-    await this.recoverIfFailed(videoId);
+    const recovered = await this.recoverIfFailed(videoId);
 
     const startSec = Math.max(0, startPositionMs / 1000);
-    if (isSameVideo) {
+    if (isSameVideo && !recovered && shouldPlay) {
+      await this.play(startPositionMs);
+      return;
+    }
+    if (isSameVideo && !recovered && this.hasPlayedVideoId === videoId && this.readLoadedVideoId() === videoId) {
+      await this.pause();
       await this.seek(startPositionMs);
-      // R1: a same-video re-apply with shouldPlay used to stop at the seek —
-      // for a video that was only ever cued, that leaves it paused at 00:00
-      // forever. Route through play(), which force-loads a never-played
-      // video (see below).
-      if (shouldPlay) await this.play();
       return;
     }
 
@@ -439,14 +443,43 @@ export class YouTubePlayer extends BasePlayer {
     // lost while the video is still loading and the OLD video keeps playing.
     // loadVideoById loads AND plays, so use it when the room is playing.
     if (shouldPlay) {
-      this.loadIssuedForVideoId = videoId;
-      this.player.loadVideoById({ videoId, startSeconds: startSec });
+      this.restartPlayback(startPositionMs);
     } else {
+      this.state = 'cued';
+      this.callbacks.onStateChange?.('cued');
       this.player.cueVideoById({ videoId, startSeconds: startSec });
     }
   }
 
-  async play() {
+  resumeFromGesture(positionMs, { restart = false } = {}) {
+    if (!this.isReady || !this.player || !this.currentVideoId || this.playerFailed) return false;
+    if (restart || (this.hasPlayedVideoId !== this.currentVideoId && this.loadIssuedForVideoId !== this.currentVideoId)) {
+      this.restartPlayback(positionMs);
+    } else {
+      if (this.state !== 'buffering' && !this.loadIssuedForVideoId &&
+          this.readLoadedVideoId() === this.currentVideoId && Math.abs(positionMs / 1000 - (this.player.getCurrentTime?.() || 0)) > 0.45) {
+        this.player.seekTo(Math.max(0, positionMs / 1000), true);
+      }
+      this.player.playVideo();
+    }
+    return true;
+  }
+
+  restartPlayback(positionMs) {
+    if (!this.isReady || !this.player || !this.currentVideoId || this.failedIsEmbedBlocked) return;
+    this.targetStartPositionMs = positionMs;
+    this.loadIssuedForVideoId = this.currentVideoId;
+    if (this.state !== 'buffering') {
+      this.state = 'buffering';
+      this.callbacks.onStateChange?.('buffering');
+    }
+    this.player.loadVideoById({
+      videoId: this.currentVideoId,
+      startSeconds: Math.max(0, positionMs / 1000),
+    });
+  }
+
+  async play(positionMs) {
     if (!this.isReady || !this.player) {
       // Round 4: a previous recovery's re-init may have failed (timed
       // out) — the player instance is attached but will never become
@@ -501,7 +534,9 @@ export class YouTubePlayer extends BasePlayer {
     await this.recoverIfFailed(this.currentVideoId);
     if (this.currentVideoId && this.hasPlayedVideoId !== this.currentVideoId) {
       if (this.loadIssuedForVideoId === this.currentVideoId) {
-        this.player.playVideo();
+        // The scheduled room command can arrive while a trusted tap is
+        // already starting this video. Leave that request alone.
+        if (!Number.isFinite(positionMs)) this.player.playVideo();
         return;
       }
       if (
@@ -512,21 +547,24 @@ export class YouTubePlayer extends BasePlayer {
         this.player.playVideo();
         return;
       }
-      let startSec = 0;
-      try {
-        startSec = Math.max(0, this.player.getCurrentTime?.() || 0);
-      } catch {
-        // Fall through with startSec 0; the drift loop seeks to the
-        // expected position once playback starts.
+      let startMs = positionMs ?? this.targetStartPositionMs ?? 0;
+      if (positionMs == null && this.readLoadedVideoId() === this.currentVideoId) {
+        startMs = Math.max(0, this.player.getCurrentTime?.() || 0) * 1000;
       }
-      this.loadIssuedForVideoId = this.currentVideoId;
-      this.player.loadVideoById({ videoId: this.currentVideoId, startSeconds: startSec });
+      this.restartPlayback(startMs);
       return;
+    }
+    if (Number.isFinite(positionMs) && this.state !== 'buffering' &&
+        this.readLoadedVideoId() === this.currentVideoId &&
+        Math.abs(positionMs - await this.getPosition()) > 450) {
+      await this.seek(positionMs);
     }
     this.player.playVideo();
   }
 
   async pause() {
+    if (this.pendingVideo) this.pendingVideo.shouldPlay = false;
+    this.loadIssuedForVideoId = null;
     if (!this.isReady || !this.player) return;
     this.player.pauseVideo();
   }
@@ -565,20 +603,60 @@ export class YouTubePlayer extends BasePlayer {
     try {
       const url = this.player?.getVideoUrl?.();
       if (typeof url === 'string' && url) {
-        const v = new URL(url).searchParams.get('v');
-        if (v && /^[A-Za-z0-9_-]{11}$/.test(v)) return v;
+        const parsed = new URL(url);
+        const videoId = parsed.searchParams.get('v') ||
+          (/^\/(embed|shorts|live)\//.test(parsed.pathname) || parsed.hostname === 'youtu.be'
+            ? parsed.pathname.split('/').at(-1)
+            : null);
+        if (videoId && /^[A-Za-z0-9_-]{11}$/.test(videoId)) return videoId;
       }
     } catch {
       // An unreadable URL cannot confirm the video identity.
     }
-    return null;
+    try {
+      const videoId = this.player?.getVideoData?.()?.video_id;
+      return typeof videoId === 'string' && /^[A-Za-z0-9_-]{11}$/.test(videoId) ? videoId : null;
+    } catch {
+      return null;
+    }
+  }
+
+  // Leave genuine buffering alone. A paused or cued iframe can be nudged
+  // without discarding the media it has already fetched.
+  retrySlowPlayback() {
+    if (!this.isReady || !this.player || this.playerFailed ||
+        !['paused', 'cued', 'unstarted'].includes(this.state)) return false;
+    this.player.playVideo();
+    return true;
   }
 
   async getLoadedVideoId() {
     return this.readLoadedVideoId() || null;
   }
 
+  getBufferedFraction() {
+    try {
+      const fraction = this.player?.getVideoLoadedFraction?.();
+      return Number.isFinite(fraction) ? fraction : 0;
+    } catch {
+      return 0;
+    }
+  }
+
   async getState() {
+    if (this.isReady && this.currentVideoId && this.state !== 'error' &&
+        this.readLoadedVideoId() === this.currentVideoId) {
+      try {
+        const code = this.player?.getPlayerState?.();
+        // While a load is pending, old paused/cued readings can precede the
+        // first buffering event. A live PLAYING reading confirms startup.
+        if (!this.loadIssuedForVideoId || code === window.YT?.PlayerState?.PLAYING) {
+          this.updateIframeState(code);
+        }
+      } catch {
+        // Keep the last event when the iframe cannot be queried.
+      }
+    }
     return this.state;
   }
 
@@ -615,6 +693,7 @@ export class YouTubePlayer extends BasePlayer {
   }
 
   async destroy() {
+    this.iframeVersion++;
     try {
       this.player?.destroy?.();
     } catch {

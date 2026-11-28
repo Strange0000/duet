@@ -20,7 +20,7 @@ import {
   resolvePlaybackStatus,
   shouldReapplyPlayback,
 } from '../src/utils/playbackSync.js';
-import { YouTubePlayer } from '../src/players/YouTubePlayer.js';
+import { preloadYouTubeAPI, YouTubePlayer } from '../src/players/YouTubePlayer.js';
 import { RoomContext } from '../src/context/RoomContext.jsx';
 import RoomView from '../src/components/RoomView.jsx';
 import { INITIAL_TRACKS } from '../src/data/mockTracks.js';
@@ -223,6 +223,22 @@ describe('shouldReapplyPlayback after an error (F1)', () => {
   });
 });
 
+it('removes a failed YouTube script so preload and Reload player can share a fresh request', async () => {
+  const first = preloadYouTubeAPI();
+  expect(preloadYouTubeAPI()).toBe(first);
+  const script = document.querySelector('script[src="https://www.youtube.com/iframe_api"]');
+  script.dispatchEvent(new Event('error'));
+  await expect(first).rejects.toThrow('Could not reach YouTube');
+  expect(script.isConnected).toBe(false);
+
+  const second = preloadYouTubeAPI();
+  expect(second).not.toBe(first);
+  const replacement = document.querySelector('script[src="https://www.youtube.com/iframe_api"]');
+  expect(replacement).not.toBe(script);
+  replacement.dispatchEvent(new Event('error'));
+  await expect(second).rejects.toThrow('Reload player');
+});
+
 // ---------------------------------------------------------------- R1/R5: YouTubePlayer
 describe('YouTubePlayer (R1 first Play, R5 stale duration)', () => {
   let capturedEvents;
@@ -274,6 +290,141 @@ describe('YouTubePlayer (R1 first Play, R5 stale duration)', () => {
     document.body.appendChild(el);
     return el;
   }
+
+  it('does not reload or seek a video that is already buffering on a slow connection', async () => {
+    const player = new YouTubePlayer();
+    const container = makeContainer();
+    await initPlayer(player, container);
+    await player.loadTrack(MIDNIGHT_CITY, 0, true);
+    capturedEvents.onStateChange({ data: window.YT.PlayerState.BUFFERING });
+
+    expect(player.retrySlowPlayback()).toBe(false);
+    expect(fakePlayer.loadVideoById).toHaveBeenCalledTimes(1);
+    expect(fakePlayer.playVideo).not.toHaveBeenCalled();
+    expect(fakePlayer.seekTo).not.toHaveBeenCalled();
+
+    capturedEvents.onStateChange({ data: window.YT.PlayerState.CUED });
+    expect(player.retrySlowPlayback()).toBe(true);
+    expect(fakePlayer.playVideo).toHaveBeenCalledTimes(1);
+    expect(fakePlayer.loadVideoById).toHaveBeenCalledTimes(1);
+    await player.destroy();
+    container.remove();
+  });
+
+  it('detects native playback when Safari misses the playing event', async () => {
+    const onStateChange = vi.fn();
+    const player = new YouTubePlayer({ onStateChange });
+    const container = makeContainer();
+    await initPlayer(player, container);
+    await player.loadTrack(MIDNIGHT_CITY, 0, false);
+    fakePlayer.getPlayerState = vi.fn(() => window.YT.PlayerState.PLAYING);
+    videoUrl = 'https://www.youtube.com/watch?v=dX3k_QDnzHE';
+
+    await expect(player.getState()).resolves.toBe('playing');
+    await player.getState();
+    expect(onStateChange.mock.calls.filter(([state]) => state === 'playing')).toHaveLength(1);
+    expect(fakePlayer.loadVideoById).not.toHaveBeenCalled();
+    await player.destroy();
+    container.remove();
+  });
+
+  it('ignores an ended event for the old video while the next video loads', async () => {
+    const onEnded = vi.fn();
+    const player = new YouTubePlayer({ onEnded });
+    const container = makeContainer();
+    await initPlayer(player, container);
+    await player.loadTrack(MIDNIGHT_CITY, 0, true);
+    videoUrl = 'https://www.youtube.com/watch?v=dX3k_QDnzHE';
+    capturedEvents.onStateChange({ data: window.YT.PlayerState.PLAYING });
+
+    await player.loadTrack(INSTANT_CRUSH, 0, true);
+    capturedEvents.onStateChange({ data: window.YT.PlayerState.ENDED });
+
+    expect(onEnded).not.toHaveBeenCalled();
+    await expect(player.getState()).resolves.toBe('buffering');
+    await player.destroy();
+    container.remove();
+  });
+
+  it('ignores late playback events from a replaced iframe', async () => {
+    const onEnded = vi.fn();
+    const player = new YouTubePlayer({ onEnded });
+    const container = makeContainer();
+    await initPlayer(player, container);
+    const oldEvents = capturedEvents;
+
+    const reloading = player.reloadPlayer();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    capturedEvents.onReady();
+    await expect(reloading).resolves.toBe(true);
+    oldEvents.onStateChange({ data: window.YT.PlayerState.ENDED });
+
+    expect(onEnded).not.toHaveBeenCalled();
+    expect(await player.getState()).toBe('ready');
+    await player.destroy();
+    container.remove();
+  });
+
+  it('restarts a stalled video at the latest room position', async () => {
+    const player = new YouTubePlayer();
+    const container = makeContainer();
+    await initPlayer(player, container);
+    await player.loadTrack({ youtubeId: 'dX3k_QDnzHE' }, 1000, true);
+    capturedEvents.onStateChange({ data: window.YT.PlayerState.BUFFERING });
+
+    player.restartPlayback(6875);
+
+    expect(fakePlayer.loadVideoById).toHaveBeenLastCalledWith({ videoId: 'dX3k_QDnzHE', startSeconds: 6.875 });
+    await player.destroy();
+    container.remove();
+  });
+
+  it('clears a blocked autoplay request so a fresh gesture can start the video', async () => {
+    const onAutoplayBlocked = vi.fn();
+    const player = new YouTubePlayer({ onAutoplayBlocked });
+    const container = makeContainer();
+    await initPlayer(player, container);
+    await player.loadTrack({ youtubeId: 'dX3k_QDnzHE' }, 1000, true);
+    capturedEvents.onAutoplayBlocked();
+
+    player.resumeFromGesture(3000);
+
+    expect(onAutoplayBlocked).toHaveBeenCalledOnce();
+    expect(fakePlayer.loadVideoById).toHaveBeenLastCalledWith({ videoId: 'dX3k_QDnzHE', startSeconds: 3 });
+    await player.destroy();
+    container.remove();
+  });
+
+  it('lets a mobile playback tap start the iframe before the scheduled room command arrives', async () => {
+    const player = new YouTubePlayer();
+    const container = makeContainer();
+    await initPlayer(player, container);
+    await player.loadTrack(MIDNIGHT_CITY, 0, false);
+
+    expect(player.resumeFromGesture(2500)).toBe(true);
+    expect(fakePlayer.loadVideoById).toHaveBeenCalledWith({ videoId: MIDNIGHT_CITY.youtubeId, startSeconds: 2.5 });
+    await player.play(2600);
+    expect(fakePlayer.loadVideoById).toHaveBeenCalledTimes(1);
+    expect(fakePlayer.playVideo).not.toHaveBeenCalled();
+    expect(fakePlayer.seekTo).not.toHaveBeenCalled();
+
+    await player.destroy();
+    container.remove();
+  });
+
+  it('starts a cued video directly at the room position without seeking first', async () => {
+    const player = new YouTubePlayer();
+    const container = makeContainer();
+    await initPlayer(player, container);
+    await player.loadTrack(MIDNIGHT_CITY, 0, false);
+
+    await player.play(4250);
+
+    expect(fakePlayer.loadVideoById).toHaveBeenLastCalledWith({ videoId: MIDNIGHT_CITY.youtubeId, startSeconds: 4.25 });
+    expect(fakePlayer.seekTo).not.toHaveBeenCalled();
+    await player.destroy();
+    container.remove();
+  });
 
   it('R1: play() on a merely-cued video force-loads it instead of calling playVideo()', async () => {
     const player = new YouTubePlayer({ onStateChange: vi.fn() });
@@ -331,16 +482,18 @@ describe('YouTubePlayer (R1 first Play, R5 stale duration)', () => {
     container.remove();
   });
 
-  it('R1: loadTrack on the same video with shouldPlay plays it (not just seeks)', async () => {
+  it('starts the same cued video at the requested position without flushing its buffer with a seek)', async () => {
     const player = new YouTubePlayer({});
     const container = makeContainer();
     await initPlayer(player, container);
     await player.loadTrack(MIDNIGHT_CITY, 0, false);
     fakePlayer.seekTo.mockClear();
     await player.loadTrack(MIDNIGHT_CITY, 5000, true);
-    expect(fakePlayer.seekTo).toHaveBeenCalledWith(5, true);
-    // Never played yet, so the play must force-load rather than playVideo().
-    expect(fakePlayer.loadVideoById).toHaveBeenCalled();
+    expect(fakePlayer.seekTo).not.toHaveBeenCalled();
+    expect(fakePlayer.loadVideoById).toHaveBeenCalledWith({
+      videoId: MIDNIGHT_CITY.youtubeId,
+      startSeconds: 5,
+    });
     container.remove();
   });
 

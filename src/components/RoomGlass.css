@@ -1,69 +1,641 @@
 .duet-room {
-  --room-glass-edge: color-mix(in srgb, var(--room-selection) 27%, transparent);
-  --room-glass-highlight: color-mix(in srgb, var(--room-accent) 14%, rgb(46 39 53 / 68%));
-  --room-glass-panel: linear-gradient(144deg, var(--room-glass-highlight), rgb(19 15 24 / 79%) 76%);
-  --room-glass-bar: rgb(15 11 21 / 84%);
+  color-scheme: dark;
+  color: var(--room-ink);
+  background: var(--room-canvas);
+  --room-action: var(--room-selection);
+  --room-on-action: #171124;
+  --room-glass-edge: color-mix(in srgb, var(--room-selection) 30%, transparent);
+  --room-surface: color-mix(in srgb, var(--room-canvas) 58%, #111019);
+  --room-glass-highlight: color-mix(in srgb, var(--room-canvas) 86%, var(--room-accent));
+  --room-glass-panel: linear-gradient(142deg, color-mix(in srgb, var(--room-glass-highlight) 86%, transparent), color-mix(in srgb, var(--room-surface) 94%, transparent) 76%);
+  --room-glass-bar: color-mix(in srgb, var(--room-surface) 93%, transparent);
+  --room-field: color-mix(in srgb, var(--room-ink) 8%, var(--room-surface));
+  --room-shadow: rgb(8 5 20 / 30%);
+}
+
+.duet-room[data-appearance="light"] {
+  color-scheme: light;
+  background: var(--room-paper);
+  --room-ink: #201a2a;
+  --room-muted: #554c60;
+  --room-edge: color-mix(in srgb, var(--room-light-accent) 24%, transparent);
+  --room-action: var(--room-light-accent);
+  --room-on-action: #fff;
+  --room-selection: color-mix(in srgb, var(--room-accent) 22%, #fff);
+  --room-glass-edge: var(--room-edge);
+  --room-surface: color-mix(in srgb, var(--room-paper) 58%, #fff);
+  --room-glass-highlight: color-mix(in srgb, var(--room-paper) 90%, var(--room-accent));
+  --room-shadow: color-mix(in srgb, var(--room-canvas) 15%, transparent);
 }
 
 .duet-room :is(.room-header, .room-mobile-nav, .room-notifications) {
   border-color: var(--room-glass-edge);
   background: var(--room-glass-bar);
-  backdrop-filter: blur(18px) saturate(125%);
+  backdrop-filter: blur(14px);
 }
 
 .duet-room :is(.room-player, .room-activity-surface, .room-partner) {
   border: 1px solid var(--room-glass-edge);
   background: var(--room-glass-panel);
-  backdrop-filter: blur(22px) saturate(130%);
+  box-shadow: 0 14px 36px var(--room-shadow);
 }
 
-.duet-room :is(.room-source-options, .room-desktop-tabs > div, .room-theme-trigger) {
-  border: 1px solid var(--room-glass-edge);
-  background: rgb(255 255 255 / 7%);
-}
-
-.duet-room :is(.room-theme-options button, .room-activity input[type="text"]) {
-  background: rgb(16 12 22 / 65%);
+.duet-room .room-player {
+  border-top-color: var(--room-accent);
 }
 
 .duet-room .room-activity input[type="text"] {
+  border: 1px solid var(--room-glass-edge);
+  background: var(--room-field);
   color: var(--room-ink);
 }
 
-.duet-room .room-notifications {
-  background: rgb(25 19 32 / 94%);
-}
-
-.duet-room :is(.room-settings, .room-metrics) {
+.duet-room .room-theme-trigger {
   border-color: var(--room-glass-edge);
-  background: rgb(25 19 32 / 92%);
+  background: var(--room-field);
+  color: var(--room-action);
 }
 
-.duet-room :is(.room-dialog-surface, .spotify-connect-panel) {
+.duet-room .room-theme-options:not([hidden]) {
+  gap: 0.625rem;
+}
+
+.duet-room .room-theme-options button {
+  position: relative;
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.3rem;
   border-color: var(--room-glass-edge);
-  background: #211a2a;
+  background: var(--room-surface);
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
 }
 
-.duet-room[data-compact="true"] {
-  & .room-player,
-  & .room-activity-surface {
-    padding: clamp(0.5rem, 2.75vw, 1rem);
-    border-radius: 1rem;
-    backdrop-filter: blur(12px) saturate(120%);
+.duet-room .room-theme-options button[aria-pressed="true"],
+.duet-room .room-theme-options button:enabled:hover {
+  border-color: var(--room-action);
+  box-shadow: 0 0 0 1px var(--room-action);
+}
+
+.duet-room .room-theme-options button:enabled:hover {
+  transform: translateY(-2px);
+}
+
+.duet-room .room-theme-options button > svg {
+  position: absolute;
+  top: 0.55rem;
+  right: 0.55rem;
+  box-sizing: content-box;
+  border-radius: 50%;
+  padding: 0.23rem;
+  background: var(--room-action);
+  color: var(--room-on-action);
+}
+
+.duet-room .room-theme-swatch {
+  width: 100%;
+  height: clamp(2.65rem, 7vw, 4.5rem);
+  background:
+    linear-gradient(112deg, color-mix(in srgb, var(--swatch-canvas) 58%, transparent), color-mix(in srgb, var(--swatch-secondary) 38%, transparent)),
+    var(--swatch-image) center / cover,
+    var(--swatch-accent);
+  box-shadow: inset 0 -3px var(--swatch-accent);
+}
+
+.room-theme-name {
+  padding: 0 0.3rem 0.22rem;
+}
+
+.duet-room :is(.room-settings, .room-metrics, .room-dialog-surface, .spotify-connect-panel) {
+  border-color: var(--room-glass-edge);
+  background: var(--room-surface);
+}
+
+.duet-room .room-transport-buttons .room-play {
+  background: var(--room-action);
+  color: var(--room-on-action);
+  box-shadow: 0 5px 21px color-mix(in srgb, var(--room-accent) 30%, transparent);
+}
+
+.duet-room .room-track-title {
+  letter-spacing: -0.04em;
+  text-wrap: balance;
+}
+
+.duet-room :is(.room-player-empty h2, .room-lobby, .room-track-title) {
+  color: var(--room-ink);
+}
+
+.duet-room[data-appearance="light"] :is(.text-white, .text-zinc-200, .hover\:text-white:hover) {
+  color: var(--room-ink);
+}
+
+.duet-room[data-appearance="light"] :is(.text-zinc-300, .text-zinc-400, .text-zinc-500, .text-zinc-600, .room-empty-copy) {
+  color: var(--room-muted);
+}
+
+.duet-room[data-appearance="light"] :is(.text-rose-200, .text-rose-300, .text-rose-400, .text-red-300, .text-red-400) {
+  color: #8c2747;
+}
+
+.duet-room[data-appearance="light"] :is(.text-emerald-300, .text-emerald-400) { color: #176346; }
+.duet-room[data-appearance="light"] :is(.text-amber-100, .text-amber-200\/90, .text-amber-300, .text-amber-400) { color: #84501b; }
+.duet-room[data-appearance="light"] :is(.text-violet-200, .text-violet-300, .text-violet-400) { color: #613895; }
+
+.duet-room[data-appearance="light"] :is(.bg-violet-600, .bg-red-600, .bg-emerald-600, .bg-black).text-white {
+  color: #fff;
+}
+
+.duet-room[data-appearance="light"] :is(.bg-white\/5, .bg-white\/10, .bg-zinc-800, .bg-zinc-900, .bg-zinc-900\/95, .spotify-client-id) {
+  background-color: var(--room-field);
+}
+
+.duet-room[data-appearance="light"] :is(.border-white\/5, .border-white\/10, .border-white\/15) {
+  border-color: var(--room-edge);
+}
+
+.duet-room :is(button, input, select):focus-visible {
+  outline: 2px solid var(--room-action);
+  outline-offset: 3px;
+}
+
+.duet-room[data-compact="true"] :is(.room-player, .room-activity-surface) {
+  padding: clamp(0.625rem, 3.5vw, 1rem);
+  border-radius: 1rem;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .duet-room :is(.room-listening, .room-activity-surface) {
+    animation: room-reveal 340ms cubic-bezier(.2,.7,.2,1) both;
   }
 
-  & .room-activity-surface {
-    padding-top: 1rem;
+  .duet-room .room-activity-surface { animation-delay: 45ms; }
+
+  .duet-room :is(.room-activity-content, .room-track-details, .room-video-details, .room-theme-options:not([hidden])) {
+    animation: room-reveal 210ms ease-out both;
   }
+
+  .duet-room .room-theme-trigger > svg:last-child { transition: transform 180ms ease; }
+  .duet-room .room-play:enabled:active { transform: scale(.94); }
+}
+
+@keyframes room-reveal {
+  from { opacity: 0; translate: 0 7px; }
+  to { opacity: 1; translate: 0 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .duet-room .room-theme-options button { transition: none; }
+  .duet-room .room-theme-options button:enabled:hover { transform: none; }
 }
 
 @media (prefers-reduced-transparency: reduce) {
   .duet-room {
-    --room-glass-panel: #22192c;
-    --room-glass-bar: #17121d;
+    --room-glass-panel: var(--room-surface);
+    --room-glass-bar: var(--room-surface);
   }
 
-  .duet-room :is(.room-header, .room-mobile-nav, .room-player, .room-activity-surface, .room-partner, .room-notifications) {
+  .duet-room :is(.room-header, .room-mobile-nav, .room-notifications) {
     backdrop-filter: none;
+  }
+}
+
+.room-share-dialog {
+  width: min(27rem, calc(100% - 2rem));
+  margin: auto;
+  padding: 1.25rem;
+  border: 1px solid var(--room-glass-edge);
+  border-radius: 1.125rem;
+  background: var(--room-surface);
+  color: var(--room-ink);
+  box-shadow: 0 20px 60px var(--room-shadow);
+}
+
+.room-share-dialog::backdrop {
+  background: rgb(8 5 20 / 60%);
+}
+
+.room-share-heading,
+.room-share-targets {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+}
+
+.room-share-heading {
+  justify-content: space-between;
+  font-size: 1.25rem;
+  font-weight: 750;
+}
+
+.room-share-heading button {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  border-radius: 0.625rem;
+  cursor: pointer;
+}
+
+.room-share-targets {
+  margin-block: 0.75rem 1rem;
+}
+
+.room-share-targets a {
+  display: grid;
+  flex: 1;
+  min-height: 44px;
+  place-items: center;
+  border: 1px solid var(--room-glass-edge);
+  border-radius: 0.625rem;
+  background: var(--room-field);
+  color: var(--room-ink);
+  font-size: 0.875rem;
+  font-weight: 750;
+}
+
+.room-share-targets a:hover,
+.room-share-heading button:hover {
+  background: var(--room-selection);
+  color: #171124;
+}
+
+.room-share-dialog label {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--room-muted);
+}
+
+.room-share-dialog input {
+  width: 100%;
+  min-height: 44px;
+  margin-top: 0.35rem;
+  padding-inline: 0.625rem;
+  border: 1px solid var(--room-glass-edge);
+  border-radius: 0.625rem;
+  background: var(--room-field);
+  font-size: 0.8125rem;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .room-share-dialog[open] {
+    animation: room-reveal 200ms ease-out both;
+  }
+}
+
+/* Shared room controls */
+.duet-room {
+  --room-button-radius: .75rem;
+  --room-button-border: color-mix(in srgb, var(--room-ink) 22%, transparent);
+  --room-button-fill: color-mix(in srgb, var(--room-ink) 9%, var(--room-surface));
+  --room-button-hover: color-mix(in srgb, var(--room-action) 20%, var(--room-surface));
+  --room-danger: #ffb3bc;
+}
+
+.duet-room[data-appearance="light"] {
+  --room-danger: #922941;
+}
+
+.duet-room :is(
+  .room-button, .room-header-action, .room-invite, .room-code, .room-theme-trigger,
+  .room-source-options button, .room-demo-roles button, .room-desktop-tabs button,
+  .room-mobile-nav button, .room-transport-buttons button, .room-lobby button,
+  .room-queue-actions button, .room-search-result button, .room-composer button,
+  .room-error button, .room-unlock button, .room-share-targets a, .room-share-heading button
+) {
+  min-height: 44px;
+  border: 1px solid var(--room-button-border);
+  border-radius: var(--room-button-radius);
+  background: var(--room-button-fill);
+  color: var(--room-ink);
+}
+
+.duet-room :is(.room-button, .room-invite, .room-code, .room-share-targets a) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: .5rem;
+  padding-inline: .75rem;
+  font-size: .8125rem;
+  font-weight: 700;
+}
+
+.duet-room .room-desktop-tabs .room-button {
+  min-width: 0;
+  gap: .375rem;
+  padding-inline: .25rem;
+  cursor: pointer;
+}
+
+.duet-room .room-desktop-tabs svg {
+  flex: none;
+}
+
+.duet-room .room-header-action,
+.duet-room button.room-lobby-avatar {
+  display: inline-grid;
+  width: 44px;
+  height: 44px;
+  flex: none;
+  place-items: center;
+  padding: 0;
+}
+
+.duet-room button.room-lobby-avatar {
+  color: var(--room-action);
+}
+
+.duet-room :is(
+  .room-button, .room-header-action, .room-invite, .room-code, .room-theme-trigger,
+  .room-source-options button, .room-demo-roles button, .room-desktop-tabs button,
+  .room-mobile-nav button, .room-transport-buttons button, .room-lobby button,
+  .room-search-result button, .room-composer button
+):enabled:hover,
+.duet-room .room-share-targets a:hover {
+  border-color: var(--room-action);
+  background: var(--room-button-hover);
+  color: var(--room-ink);
+}
+
+.duet-room :is(.room-source-options button, .room-demo-roles button)[aria-pressed="true"],
+.duet-room :is(.room-desktop-tabs button, .room-mobile-nav button)[aria-current],
+.duet-room .room-header-action[aria-expanded="true"],
+.duet-room .room-lobby-actions button:last-child,
+.duet-room .room-button[data-tone="primary"],
+.duet-room .room-transport-buttons .room-play {
+  border-color: var(--room-action);
+  background: var(--room-action);
+  color: var(--room-on-action);
+}
+
+.duet-room .room-button[data-tone="danger"] {
+  color: var(--room-danger);
+}
+
+.duet-room .room-button[data-tone="danger"][data-armed="true"] {
+  border-color: var(--room-danger);
+  background: color-mix(in srgb, var(--room-danger) 18%, var(--room-surface));
+}
+
+.duet-room .room-button:disabled {
+  cursor: default;
+  opacity: .65;
+}
+
+.room-settings {
+  border-top: 1px solid var(--room-glass-edge);
+}
+
+.room-settings-inner,
+.room-settings-group,
+.room-transfer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .5rem;
+}
+
+.room-settings-inner {
+  justify-content: space-between;
+  max-width: 1460px;
+  margin-inline: auto;
+  padding: .75rem clamp(.75rem, 4vw, 4rem);
+}
+
+@media (max-width: 767px) {
+  .room-settings-inner {
+    padding: 0;
+  }
+}
+
+.duet-room .room-switch {
+  justify-content: space-between;
+  text-align: left;
+  cursor: pointer;
+}
+
+.room-switch > span:first-child {
+  display: inline-flex;
+  align-items: center;
+  gap: .5rem;
+}
+
+.room-switch-track {
+  display: flex;
+  width: 1.85rem;
+  height: 1.05rem;
+  flex: none;
+  align-items: center;
+  padding-inline: .18rem;
+  border-radius: 1rem;
+  background: var(--room-muted);
+}
+
+.room-switch-track::after {
+  content: '';
+  width: .66rem;
+  height: .66rem;
+  border-radius: 50%;
+  background: #fff;
+}
+
+.room-switch[aria-checked="true"] .room-switch-track {
+  justify-content: end;
+  background: var(--room-action);
+}
+
+.room-transfer-dialog h2 {
+  font-size: 1.25rem;
+  font-weight: 750;
+}
+
+.room-transfer-dialog p {
+  margin-block: .5rem 1rem;
+  color: var(--room-muted);
+  font-size: .875rem;
+}
+
+.room-transfer-dialog .room-transfer-error { color: var(--room-danger); }
+.room-transfer-actions { justify-content: flex-end; }
+
+.room-session-summary {
+  max-height: calc(100% - 2rem);
+  overflow: auto;
+  padding: clamp(0.875rem, 4vw, 1.5rem);
+}
+
+.room-session-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.room-session-icon {
+  display: grid;
+  width: 2.75rem;
+  height: 2.75rem;
+  flex: none;
+  place-items: center;
+  border: 1px solid var(--room-glass-edge);
+  border-radius: var(--room-button-radius);
+  background: var(--room-button-fill);
+  color: var(--room-action);
+}
+
+.room-session-heading h2 {
+  font-family: var(--font-display);
+  font-size: 1.25rem;
+  font-weight: 750;
+}
+
+.room-session-heading p,
+.room-session-stats dt {
+  color: var(--room-muted);
+  font-size: 0.8125rem;
+}
+
+.room-session-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin-block: 1rem;
+}
+
+.room-session-stats > div {
+  padding: 0.625rem 0.75rem;
+  border: 1px solid var(--room-button-border);
+  border-radius: var(--room-button-radius);
+  background: var(--room-button-fill);
+}
+
+.room-session-stats dd {
+  font-size: 1.125rem;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+
+.room-session-stats .room-session-duration {
+  grid-column: 1 / -1;
+  padding: 0.75rem;
+  border-color: var(--room-glass-edge);
+  background: linear-gradient(115deg, var(--room-field), var(--room-button-fill));
+}
+
+.room-session-duration dd {
+  color: var(--room-action);
+  font-family: var(--font-display);
+  font-size: clamp(1.65rem, 7vw, 2.25rem);
+  line-height: 1.15;
+}
+
+.room-session-stats .room-session-sync {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-block: 0.375rem;
+  border: 0;
+  background: none;
+}
+
+.room-session-sync dd {
+  font-size: 0.875rem;
+}
+
+.room-session-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding-top: 0.875rem;
+  border-top: 1px solid var(--room-glass-edge);
+}
+
+.room-session-actions .room-button {
+  flex: 1 1 auto;
+}
+
+.duet-room .room-session-actions .room-button[data-tone="danger"] {
+  border-color: color-mix(in srgb, var(--room-danger) 38%, transparent);
+  background: color-mix(in srgb, var(--room-danger) 13%, var(--room-surface));
+}
+
+.duet-room .room-session-actions .room-button[data-tone="danger"]:hover {
+  background: color-mix(in srgb, var(--room-danger) 24%, var(--room-surface));
+}
+
+/* Frosted surfaces with a clear highlight along the lit edge. */
+@media (prefers-reduced-transparency: no-preference) {
+  .duet-room[data-glass="on"] {
+    --room-glass-panel: linear-gradient(145deg,
+      color-mix(in srgb, var(--room-ink) 12%, transparent),
+      transparent 44%),
+      color-mix(in srgb, var(--room-surface) 62%, transparent);
+    --room-glass-bar: color-mix(in srgb, var(--room-surface) 67%, transparent);
+    --room-glass-edge: color-mix(in srgb, var(--room-selection) 49%, transparent);
+    --room-button-fill: color-mix(in srgb, var(--room-ink) 9%, transparent);
+    --room-frost: blur(14px) saturate(140%);
+  }
+
+  .duet-room[data-glass="on"][data-appearance="light"] {
+    --room-glass-panel: linear-gradient(145deg, rgb(255 255 255 / 62%), rgb(255 255 255 / 10%) 49%),
+      color-mix(in srgb, var(--room-paper) 73%, transparent);
+  }
+
+  .duet-room[data-glass="on"] :is(.room-player, .room-activity-surface, .room-partner) {
+    border-top-color: color-mix(in srgb, var(--room-selection) 70%, transparent);
+    backdrop-filter: var(--room-frost);
+    -webkit-backdrop-filter: var(--room-frost);
+    box-shadow: inset 0 1px rgb(255 255 255 / 22%), inset 0 -1px rgb(255 255 255 / 8%),
+      0 18px 42px var(--room-shadow);
+  }
+
+  .duet-room[data-glass="on"] :is(.room-settings, .room-dialog-surface, .room-share-dialog) {
+    background: var(--room-glass-panel);
+    backdrop-filter: var(--room-frost);
+    -webkit-backdrop-filter: var(--room-frost);
+  }
+
+  .duet-room[data-glass="on"][data-compact="true"] {
+    --room-frost: blur(9px) saturate(130%);
+  }
+}
+
+.room-settings-section {
+  min-width: 0;
+}
+
+.room-settings-section > h2 {
+  margin-bottom: .45rem;
+  color: var(--room-muted);
+  font-size: .75rem;
+  font-weight: 750;
+}
+
+.room-settings-inner {
+  align-items: start;
+  row-gap: .875rem;
+}
+
+.room-permission-note {
+  padding: .65rem .75rem;
+  border: 1px solid var(--room-glass-edge);
+  border-radius: var(--room-button-radius);
+  background: var(--room-field);
+  color: var(--room-ink);
+  font-size: .8125rem;
+}
+
+.duet-room :is(.room-search-result, .room-composer, .room-error, .room-reactions, .room-source-options) button:disabled {
+  cursor: default;
+  opacity: .55;
+}
+
+@media (max-width: 599px) {
+  .room-settings-section {
+    width: 100%;
+  }
+
+  .room-settings-section:first-child .room-switch {
+    width: 100%;
   }
 }

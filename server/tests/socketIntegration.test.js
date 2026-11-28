@@ -51,6 +51,17 @@ describe('Duet Backend HTTP & Socket.IO Integration', () => {
     expect(providers.body.spotify.available).toBe(true);
   });
 
+  it('allows Duet origins and rejects unrelated Netlify applications', async () => {
+    for (const origin of ['https://duet-music.pages.dev', 'https://duet-music-app.pages.dev', 'https://preview--duet-music.netlify.app']) {
+      const res = await request(app).get('/health').set('Origin', origin);
+      expect(res.headers['access-control-allow-origin']).toBe(origin);
+    }
+    for (const origin of ['https://duet-xyz.netlify.app', 'https://duet-music.pages.dev.example.com']) {
+      const res = await request(app).get('/health').set('Origin', origin);
+      expect(res.headers['access-control-allow-origin']).toBeUndefined();
+    }
+  });
+
   it('GET /api/youtube/resolve reports configured:false with no API key (N-01)', async () => {
     const origKey = env.YOUTUBE_API_KEY;
     try {

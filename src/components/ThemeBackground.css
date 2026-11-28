@@ -7,7 +7,7 @@
   isolation: isolate;
   background-image: radial-gradient(
     ellipse at 50% 25%,
-    color-mix(in srgb, var(--ambient-accent) 25%, transparent),
+    color-mix(in srgb, var(--room-accent) 58%, transparent),
     transparent 72%
   );
 }
@@ -24,7 +24,7 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
-  opacity: 0.42;
+  opacity: 0.77;
 }
 
 .room-ambient-motion {
@@ -37,7 +37,7 @@
   z-index: 1;
   inset: 0;
   background:
-    linear-gradient(180deg, rgb(9 7 13 / 34%), transparent 22%, rgb(9 7 13 / 54%) 75%, #0b0910 100%);
+    linear-gradient(180deg, transparent 25%, color-mix(in srgb, var(--room-canvas) 64%, transparent) 84%, var(--room-canvas));
 }
 
 .room-ambient[data-theme="midnight"] .room-ambient-motion {
@@ -117,5 +117,46 @@
 @media (prefers-reduced-motion: reduce) {
   .room-ambient[data-theme] .room-ambient-motion {
     animation: none;
+  }
+}
+
+.duet-room[data-appearance="light"] .room-ambient {
+  background-color: var(--room-paper);
+}
+
+.duet-room[data-appearance="light"] .room-ambient-image {
+  opacity: 0.31;
+  mix-blend-mode: multiply;
+}
+
+.duet-room[data-appearance="light"] .room-ambient::after {
+  background: linear-gradient(180deg, transparent, var(--room-paper) 94%);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .room-ambient-image {
+    animation: room-theme-appear 380ms ease-out both;
+  }
+}
+
+@keyframes room-theme-appear {
+  from { opacity: 0; }
+}
+
+@media (prefers-reduced-transparency: no-preference) {
+  .duet-room[data-glass="on"] .room-ambient-image {
+    opacity: .96;
+  }
+
+  .duet-room[data-glass="on"] .room-ambient::after {
+    background: linear-gradient(180deg, transparent 43%, color-mix(in srgb, var(--room-canvas) 58%, transparent));
+  }
+
+  .duet-room[data-glass="on"][data-appearance="light"] .room-ambient-image {
+    opacity: .57;
+  }
+
+  .duet-room[data-glass="on"][data-appearance="light"] .room-ambient::after {
+    background: linear-gradient(180deg, transparent 43%, color-mix(in srgb, var(--room-paper) 67%, transparent));
   }
 }

@@ -13,9 +13,12 @@ export default function AudioVisualizerCanvas({
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
+    if (!ctx) return;
     let animId;
     let phase = 0;
     let lastDrawTime = 0;
+    let width = 0;
+    let height = 0;
 
     // Check prefers-reduced-motion
     const motionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
@@ -24,14 +27,18 @@ export default function AudioVisualizerCanvas({
     motionQuery.addEventListener('change', onMotionChange);
 
     const resize = () => {
-      const dpr = window.devicePixelRatio || 1;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
       const rect = canvas.getBoundingClientRect();
-      canvas.width = rect.width * dpr;
-      canvas.height = rect.height * dpr;
+      width = rect.width;
+      height = rect.height;
+      canvas.width = width * dpr;
+      canvas.height = height * dpr;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     };
 
     resize();
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(resize);
+    observer?.observe(canvas);
     window.addEventListener('resize', resize);
 
     const draw = (timestamp) => {
@@ -49,9 +56,8 @@ export default function AudioVisualizerCanvas({
       }
       lastDrawTime = timestamp;
 
-      const rect = canvas.getBoundingClientRect();
-      const w = rect.width;
-      const h = rect.height;
+      const w = width;
+      const h = height;
 
       ctx.clearRect(0, 0, w, h);
 
@@ -124,7 +130,8 @@ export default function AudioVisualizerCanvas({
         ctx.fillStyle = norm < 0.5 ? accentColor : secondaryColor;
         ctx.globalAlpha = 0.35;
         ctx.beginPath();
-        ctx.roundRect(i * gap + gap * 0.25, h - barH - 8, Math.max(2, gap * 0.45), barH, 2);
+        const drawBar = ctx.roundRect || ctx.rect;
+        drawBar.call(ctx, i * gap + gap * 0.25, h - barH - 8, Math.max(2, gap * 0.45), barH, 2);
         ctx.fill();
       }
       ctx.globalAlpha = 1;
@@ -136,6 +143,7 @@ export default function AudioVisualizerCanvas({
     animId = requestAnimationFrame(draw);
     return () => {
       cancelAnimationFrame(animId);
+      observer?.disconnect();
       window.removeEventListener('resize', resize);
       motionQuery.removeEventListener('change', onMotionChange);
     };

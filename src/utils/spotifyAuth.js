@@ -48,6 +48,10 @@ export function getStoredSpotifyAuth() {
   }
 }
 
+export function canUseSpotify(auth = getStoredSpotifyAuth()) {
+  return Boolean(auth?.accessToken) && (!auth.user?.product || auth.user.product === 'premium');
+}
+
 function saveSpotifyAuth(auth) {
   try {
     localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(auth));
@@ -165,7 +169,7 @@ export async function handleSpotifyCallback(search) {
       ? {
           id: user.id,
           displayName: user.display_name || user.id,
-          product: user.product || 'free',
+          product: user.product || null,
         }
       : null,
   };
