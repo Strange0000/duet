@@ -8,6 +8,9 @@ import { fetchSongArtwork } from '../utils/artworkApi';
 import { canUseSpotify, getStoredSpotifyAuth } from '../utils/spotifyAuth';
 import SpotifyConnectModal from './SpotifyConnectModal';
 import { getGlassAppearance, HOME_THEME_KEY } from '../utils/appearance';
+import heroArtwork from '../assets/duet-headphones.webp';
+import heroArtworkSmall from '../assets/duet-headphones-small.webp';
+import heroArtworkFallback from '../assets/duet-headphones-fallback.jpg?inline';
 import './LandingPage.css';
 
 const DEMO_TRACKS = [0, 1, 4];
@@ -326,6 +329,7 @@ export default function LandingPage({
 
   const createRoom = () => onCreateRoom(connectedSource);
   const [glass] = useState(getGlassAppearance);
+  const [heroImageFailed, setHeroImageFailed] = useState(false);
 
   return (
     <div className="duet-home" data-theme={homeTheme} data-glass={glass ? 'on' : 'off'} id="home">
@@ -426,8 +430,9 @@ export default function LandingPage({
           </div>
           <figure className="home-hero-art">
             <img
-              src="/home/duet-headphones.webp"
-              srcSet="/home/duet-headphones-small.webp 640w, /home/duet-headphones.webp 1320w"
+              src={heroImageFailed ? heroArtworkFallback : heroArtwork}
+              srcSet={heroImageFailed ? undefined : `${heroArtworkSmall} 640w, ${heroArtwork} 1320w`}
+              onError={heroImageFailed ? undefined : () => setHeroImageFailed(true)}
               sizes="(max-width: 899px) 94vw, 55vw"
               width="1320"
               height="990"
