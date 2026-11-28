@@ -2077,25 +2077,21 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                 <h2 ref={activityHeadingRef} tabIndex={-1}>{activityTitle}</h2>
                 {activeTab === 'queue' && <span>{queue.length} {queue.length === 1 ? 'song' : 'songs'}</span>}
               </div>
-              <div className="room-desktop-tabs flex items-center justify-between border-b border-white/5 pb-4">
-                <div className="inline-flex flex-wrap rounded-2xl bg-white/5 p-1">
-                  {ROOM_NAVIGATION.slice(1).map(({ id, label, icon: Icon }) => (
-                    <button
-                      key={id}
-                      type="button"
-                      onClick={() => setActiveTab(id)}
-                      aria-current={activeTab === id ? 'location' : undefined}
-                      className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold transition cursor-pointer ${
-                        activeTab === id ? 'bg-white text-zinc-950' : 'text-zinc-400 hover:text-white'
-                      }`}
-                    >
-                      <Icon className="h-3.5 w-3.5" aria-hidden="true" />
-                      {label}
-                      {badgeCount[id] > 0 && <span className="room-desktop-badge">{badgeCount[id]}</span>}
-                    </button>
-                  ))}
-                </div>
-              </div>
+              <nav aria-label="Room activity" className="room-desktop-tabs grid grid-cols-4 gap-2 border-b border-white/5 pb-4">
+                {ROOM_NAVIGATION.slice(1).map(({ id, label, icon: Icon }) => (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => setActiveTab(id)}
+                    aria-current={activeTab === id ? 'location' : undefined}
+                    className="room-button"
+                  >
+                    <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+                    {label}
+                    {badgeCount[id] > 0 && <span className="room-desktop-badge">{badgeCount[id]}</span>}
+                  </button>
+                ))}
+              </nav>
 
               <div key={activeTab} className="room-activity-content">
               {activeTab === 'lobby' && (

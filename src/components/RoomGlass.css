@@ -44,7 +44,7 @@
   border-top-color: var(--room-accent);
 }
 
-.duet-room :is(.room-desktop-tabs > div, .room-activity input[type="text"]) {
+.duet-room .room-activity input[type="text"] {
   border: 1px solid var(--room-glass-edge);
   background: var(--room-field);
   color: var(--room-ink);
@@ -317,6 +317,17 @@
   padding-inline: .75rem;
   font-size: .8125rem;
   font-weight: 700;
+}
+
+.duet-room .room-desktop-tabs .room-button {
+  min-width: 0;
+  gap: .375rem;
+  padding-inline: .25rem;
+  cursor: pointer;
+}
+
+.duet-room .room-desktop-tabs svg {
+  flex: none;
 }
 
 .duet-room .room-header-action,
