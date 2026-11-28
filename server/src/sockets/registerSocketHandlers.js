@@ -499,8 +499,10 @@ export function registerSocketHandlers(io, store, env) {
       if (res.error) return reply(ack, { ok: false, code: res.code, error: res.error });
 
       const serialized = store.serializeRoom(res.room);
-      io.to(ctx.room.code).emit('playback:state', serialized.playback);
-      emitRoomState(res.room);
+      if (res.changed) {
+        io.to(ctx.room.code).emit('playback:state', serialized.playback);
+        emitRoomState(res.room);
+      }
       reply(ack, { ok: true, playback: serialized.playback, state: serialized });
     });
 

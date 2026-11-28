@@ -6,8 +6,20 @@ import { RoomProvider, useRoom } from '../src/context/RoomContext.jsx';
 import { INITIAL_TRACKS } from '../src/data/mockTracks.js';
 import { emitAck } from '../src/services/socketClient.js';
 
+const socket = vi.hoisted(() => {
+  const listeners = new Map();
+  return {
+    connected: true,
+    id: 'socket-1',
+    on(event, listener) { listeners.set(event, listener); },
+    off(event) { listeners.delete(event); },
+    receive(event) { listeners.get(event)?.(); },
+    volatile: { emit() {} },
+  };
+});
+
 vi.mock('../src/services/socketClient.js', () => ({
-  getSocket: () => ({ connected: true, on() {}, off() {}, volatile: { emit() {} } }),
+  getSocket: () => socket,
   emitAck: vi.fn(),
 }));
 
@@ -100,6 +112,26 @@ describe('iPhone room playback recovery', () => {
 
   const tick = async (ms) => act(async () => vi.advanceTimersByTimeAsync(ms));
   const join = () => act(async () => latest.joinRoom({ roomCode: 'GUEST1' }));
+
+  it('clears the room and stops the player when a reconnect is rejected', async () => {
+    await join();
+    expect(latest.roomState?.roomCode).toBe('GUEST1');
+    const originalAck = emitAck.getMockImplementation();
+    emitAck.mockImplementation((event, ...args) => event === 'room:reconnect'
+      ? Promise.resolve({ ok: false, code: 'INVALID_SESSION' })
+      : originalAck(event, ...args));
+
+    await act(async () => {
+      socket.receive('disconnect');
+      socket.receive('connect');
+    });
+
+    expect(latest.roomState).toBeNull();
+    expect(latest.session).toBeNull();
+    expect(latest.roomError).toMatch(/session expired/i);
+    expect(sessionStorage.getItem('duet_active_session')).toBeNull();
+    expect(iframe.destroy).toHaveBeenCalledOnce();
+  });
 
   it('starts syncing after a native play even if the iframe event is missed', async () => {
     await join();

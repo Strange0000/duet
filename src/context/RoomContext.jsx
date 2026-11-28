@@ -694,7 +694,7 @@ export function RoomProvider({ children }) {
           if (!isCurrent()) return;
           const st = roomStateRef.current;
           const track = st?.queue.find((item) => item.queueItemId === st.currentQueueItemId)?.track;
-          if (!sessionRef.current || !track || st.playback?.playbackState !== 'playing' ||
+          if (sessionRef.current?.role !== 'host' || !track || st.playback?.playbackState !== 'playing' ||
               loadedTrackKeyRef.current !== `${track.id}:${st.playback.trackVersion}`) return;
           emitAck('player:status', { endedTrackVersion: st.playback.trackVersion }).catch(() => {});
         },
@@ -797,51 +797,85 @@ export function RoomProvider({ children }) {
     [runClockSync, seedPositionFromPlayback]
   );
 
+  const resetRoom = useCallback(() => {
+    adoptedRef.current = false;
+    sessionRef.current = null;
+    roomStateRef.current = null;
+    playerInitVersionRef.current += 1;
+    pendingPlaybackRef.current = null;
+    monitorPlaybackRef.current = null;
+    for (const timer of [scheduledPlayTimerRef, playWatchdogTimerRef]) {
+      clearTimeout(timer.current);
+      timer.current = null;
+    }
+    const player = playerRef.current;
+    playerRef.current = null;
+    player?.destroy().catch(() => {});
+    loadedTrackKeyRef.current = null;
+    lastAppliedPlaybackRef.current = null;
+    audioUnlockedRef.current = false;
+    playerStateRef.current = 'idle';
+    setPlayerState('idle');
+    setAudioUnlocked(false);
+    setPlayerError(null);
+    setPendingApproval(null);
+    backgroundAudio.destroy();
+    clearSession();
+    setSession(null);
+    setRoomState(null);
+  }, []);
+
   // Setup Socket.IO listeners
   useEffect(() => {
     const socket = getSocket();
 
     const onConnect = () => {
-      setConnectionStatus('connected');
+      const cur = sessionRef.current;
+      setConnectionStatus(cur ? 'reconnecting' : 'connected');
       runClockSync();
       // Initial invite navigation restores its session through room:join.
       // An already-mounted room re-adopts its socket after a network drop.
-      const cur = sessionRef.current;
       if (cur?.roomCode && cur?.sessionToken) {
-        emitAck('room:reconnect', {
-          roomCode: cur.roomCode,
-          sessionToken: cur.sessionToken,
-        })
-          .then(async (res) => {
-            if (res?.ok) {
-              const nextSession = {
-                roomCode: res.roomCode,
-                participantId: res.participantId,
-                sessionToken: res.sessionToken,
-                role: res.role,
-              };
-              setSession(nextSession);
-              saveSession(nextSession);
-              // F2: the re-adoption succeeded — this socket may send commands.
-              adoptedRef.current = true;
-              setRoomState(res.state);
-              // R6: adopt the room's current position/theme at once, and
-              // re-fetch the authoritative snapshot in case a broadcast
-              // (e.g. a theme change) landed while the socket was down.
-              seedPositionFromPlayback(res.state?.playback);
-              refreshRoomStateFromServer();
-              runClockSync();
-              const trk =
-                res.state?.queue?.find((q) => q.queueItemId === res.state.currentQueueItemId)
-                  ?.track || res.state?.queue?.[0]?.track;
-              if (res.state?.playback && trk) {
-                await applyPlaybackToPlayer(res.state.playback, trk);
-              }
-            } else {
-              clearSession();
-            }
-          })
-          .catch(() => {});
+        const socketId = socket.id;
+        const isCurrentConnection = () => socket.connected && socket.id === socketId &&
+          sessionRef.current?.sessionToken === cur.sessionToken;
+        const reconnect = async () => {
+          let result;
+          for (let attempt = 0; attempt < 2 && isCurrentConnection(); attempt += 1) {
+            result = await emitAck('room:reconnect', {
+              roomCode: cur.roomCode,
+              sessionToken: cur.sessionToken,
+            }, 8000).catch(() => null);
+            if (result || adoptedRef.current) break;
+          }
+          if (!isCurrentConnection()) return;
+          if (result?.ok) {
+            const nextSession = {
+              roomCode: result.roomCode,
+              participantId: result.participantId,
+              sessionToken: result.sessionToken,
+              role: result.role,
+            };
+            setSession(nextSession);
+            saveSession(nextSession);
+            adoptedRef.current = true;
+            setConnectionStatus('connected');
+            setRoomState(result.state);
+            seedPositionFromPlayback(result.state?.playback);
+            refreshRoomStateFromServer();
+            runClockSync();
+            const track = result.state?.queue?.find((item) => item.queueItemId === result.state.currentQueueItemId)?.track;
+            if (result.state?.playback && track) await applyPlaybackToPlayer(result.state.playback, track);
+          } else if (!adoptedRef.current) {
+            const expired = ['INVALID_SESSION', 'ROOM_NOT_FOUND', 'PARTICIPANT_NOT_FOUND'].includes(result?.code);
+            resetRoom();
+            setConnectionStatus('connected');
+            setRoomError(expired
+              ? 'Your room session expired. Rejoin the room or start a new one.'
+              : 'Could not reconnect to the room. Try joining again.');
+          }
+        };
+        reconnect().catch(() => {});
       }
     };
 
@@ -933,12 +967,8 @@ export function RoomProvider({ children }) {
     };
 
     const onRoomClosed = ({ reason }) => {
+      resetRoom();
       setRoomError(reason || 'Room closed');
-      setPendingApproval(null);
-      adoptedRef.current = false;
-      setRoomState(null);
-      setSession(null);
-      clearSession();
     };
 
     const onRoomJoined = (res) => {
@@ -955,6 +985,7 @@ export function RoomProvider({ children }) {
       // F2: the server just adopted this socket (join, reconnect, or an
       // approved join) — commands may be sent from here on.
       adoptedRef.current = true;
+      setConnectionStatus('connected');
       setRoomState(res.state);
       // R6: adopt the room's current position immediately on (re)join —
       // before any audio-unlock tap. The theme comes from res.state
@@ -1041,6 +1072,7 @@ export function RoomProvider({ children }) {
     markPartnerSeen,
     seedPositionFromPlayback,
     refreshRoomStateFromServer,
+    resetRoom,
   ]);
 
   // R3: re-evaluate derived presence every 2s while a partner is in the
@@ -1179,7 +1211,7 @@ export function RoomProvider({ children }) {
       }
       if (playerRef.current !== player ||
           computePlaybackSignature(curTrack, roomStateRef.current?.playback) !== computePlaybackSignature(curTrack, st.playback)) return;
-      if (realDurationMs > 0 && !(player instanceof LocalAudioPlayer)) {
+      if (realDurationMs > 0 && sessionRef.current?.role === 'host' && !(player instanceof LocalAudioPlayer)) {
         // Round 4 (a): only report once the player has actually started
         // this track — an errored player's getDuration() returns the
         // failed video's YouTube length, which would corrupt the queue
@@ -1475,34 +1507,14 @@ export function RoomProvider({ children }) {
   }, [runClockSync, seedPositionFromPlayback, refreshRoomStateFromServer]);
 
   const leaveRoom = useCallback(async () => {
-    playerInitVersionRef.current += 1;
-    pendingPlaybackRef.current = null;
-    monitorPlaybackRef.current = null;
-    clearTimeout(playWatchdogTimerRef.current);
-    playWatchdogTimerRef.current = null;
-    clearTimeout(scheduledPlayTimerRef.current);
-    scheduledPlayTimerRef.current = null;
     try {
-      await emitAck('room:leave', {});
+      await emitAck('room:leave', {}, 5000);
     } catch {
-      // Ignore
+      // The room may already be closed or disconnected.
+    } finally {
+      resetRoom();
     }
-    if (playerRef.current) {
-      await playerRef.current.destroy();
-      playerRef.current = null;
-      loadedTrackKeyRef.current = null;
-      lastAppliedPlaybackRef.current = null;
-    }
-    backgroundAudio.destroy();
-    clearSession();
-    setSession(null);
-    setRoomState(null);
-    // F2: no room, no adoption — a later command must not assume the old
-    // socket is still adopted.
-    adoptedRef.current = false;
-    setAudioUnlocked(false);
-    setPlayerError(null);
-  }, []);
+  }, [resetRoom]);
 
   const startYouTubeFromGesture = useCallback((positionMs) => {
     const player = playerRef.current;
