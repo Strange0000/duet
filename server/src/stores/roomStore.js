@@ -607,10 +607,19 @@ export class RoomStore {
     if (trackVersion !== room.playback.trackVersion) {
       return { error: 'Track has changed; duration no longer applies', code: 'VERSION_MISMATCH' };
     }
+    // Round 5: the wild-disagreement guard lives CLIENT-side only
+    // (shouldReportRealDuration) — the server cannot tell a legitimate
+    // correction from a wrong-video report (a local-fixture track's stored
+    // metadata may genuinely differ from the real audio length, and the
+    // N-02 contract is to accept any in-range duration for the current
+    // track version). A server-side guard here broke that contract.
     room.playback.durationMs = Math.round(durationMs);
     const currentItem = room.queue.find((q) => q.queueItemId === room.currentQueueItemId);
     if (currentItem) {
-      currentItem.track.durationSec = durationMs / 1000;
+      // Round 5: store whole seconds. The old float (e.g. 339.6) made the
+      // queue display floor to 05:39 while the playing total rounded to
+      // 05:40 — the same track disagreeing with itself by a second.
+      currentItem.track.durationSec = Math.round(durationMs / 1000);
     }
     this._bumpVersion(room);
     return { room };

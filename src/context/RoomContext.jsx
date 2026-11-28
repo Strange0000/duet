@@ -385,7 +385,7 @@ export function RoomProvider({ children }) {
   // below serializes it (see applyInFlightRef) so concurrent invocations
   // during a recovery cannot destroy each other's fresh player instance.
   const applyPlaybackToPlayerInner = useCallback(
-    async (playback, track) => {
+    async (playback, track, options = {}) => {
       const player = playerRef.current;
       if (!player || !playback || !track) return;
 
@@ -398,6 +398,12 @@ export function RoomProvider({ children }) {
       // buffering, and each one cleared the stall watchdog before it could
       // fire. Only re-apply when the player is actually in the wrong state.
       // A scheduled play already queued is never disturbed either.
+      // Round 5: `force` bypasses the dedup. unlockAudio uses it: after a
+      // refresh the player is cued (which the dedup reads as "already
+      // trying to start") while audio was locked, so the post-tap re-apply
+      // was swallowed and the guest's video sat on its thumbnail until a
+      // host action arrived with a new signature. The tap is exactly the
+      // event that unblocks play — it must always re-apply.
       if (
         loadedTrackKeyRef.current === trackKey &&
         lastAppliedPlaybackRef.current === signature
@@ -410,6 +416,7 @@ export function RoomProvider({ children }) {
           liveState = null;
         }
         if (
+          !options.force &&
           !shouldReapplyPlayback({
             signature,
             lastSignature: lastAppliedPlaybackRef.current,
@@ -451,6 +458,11 @@ export function RoomProvider({ children }) {
           const p = playerRef.current;
           const st = roomStateRef.current;
           if (!p || !st?.playback || st.playback.playbackState !== 'playing') return;
+          // Round 5: never cry "stalled" while audio is still locked — a
+          // guest who rejoined a playing room and has not tapped yet is
+          // not stalled, they just have not unlocked audio. The unlock
+          // tap force-applies playback and arms a fresh watchdog.
+          if (!audioUnlockedRef.current) return;
           let state = 'idle';
           let pos = 0;
           try {
@@ -499,7 +511,11 @@ export function RoomProvider({ children }) {
         // returns the PREVIOUS track's length and would corrupt the new
         // track's duration server-side. The 1s drift loop reports it once
         // the player is confirmed to be on the new track.
-        if (playback.playbackState === 'playing') armStallWatchdog(expectedMs);
+        // Round 5: only arm the watchdog once audio is unlocked — while
+        // locked the player cannot start no matter what, so arming here
+        // would surface a false "Playback didn't start" error for a guest
+        // who simply has not tapped yet.
+        if (playback.playbackState === 'playing' && audioUnlockedRef.current) armStallWatchdog(expectedMs);
         // B1 (follow-up): loadVideoById is asynchronous — the new video has
         // NOT finished loading when loadTrack returns. The seek/play sync
         // below would therefore operate on the OLD video still loaded in the
@@ -558,11 +574,11 @@ export function RoomProvider({ children }) {
   // invocation is safe: the next broadcast (~1s later) retries it with
   // the latest state.
   const applyPlaybackToPlayer = useCallback(
-    async (playback, track) => {
+    async (playback, track, options) => {
       if (applyInFlightRef.current) return;
       applyInFlightRef.current = true;
       try {
-        await applyPlaybackToPlayerInner(playback, track);
+        await applyPlaybackToPlayerInner(playback, track, options);
       } finally {
         applyInFlightRef.current = false;
       }
@@ -1034,6 +1050,32 @@ export function RoomProvider({ children }) {
       const estimatedNow = clockSyncRef.current.estimateServerNowMs();
       const expectedMs = computeExpectedPositionMs(st.playback, estimatedNow);
 
+      // B1: which media the player has ACTUALLY loaded (computed once, used
+      // by the state overrule below, the duration report and the seek guard).
+      // Round 5: is the player still holding the PREVIOUS video? After
+      // Next, loadVideoById takes a moment to swap the video; until it
+      // does, the player's position/duration belong to the OLD video.
+      // Reporting that position as this track's position showed the new
+      // track starting at the old track's elapsed time (00:20/00:25/00:36)
+      // instead of 00:00 — so the reported position below is the new
+      // track's expected position while the player is on the wrong video.
+      let loadedId = null;
+      try {
+        loadedId = typeof player.getLoadedVideoId === 'function' ? await player.getLoadedVideoId() : null;
+      } catch {
+        loadedId = null;
+      }
+      const curTrack =
+        st.queue?.find((q) => q.queueItemId === st.currentQueueItemId)?.track ||
+        st.queue?.[0]?.track ||
+        null;
+      const mySource =
+        st.participants?.find((p) => sessionRef.current && p.id === sessionRef.current.participantId)?.source ||
+        myParticipant?.source ||
+        'youtube';
+      const expectedId = expectedMediaId(curTrack, mySource);
+      const wrongVideo = Boolean(loadedId && expectedId && loadedId !== expectedId);
+
       // R4: poll the REAL player state every tick. onStateChange events can
       // be missed/coalesced and the server's buffering/paused flags lag, so
       // the pill/button must not trust either alone: if the position is
@@ -1050,9 +1092,16 @@ export function RoomProvider({ children }) {
         const polled = await player.getState();
         if (polled) {
           let effective = polled;
+          // Round 5: the overrule must not fire while the player is on the
+          // WRONG video — the old video's frozen position advancing past a
+          // stale prevPos (e.g. the first tick after Next) says nothing
+          // about the new track playing, and overruling to 'playing'
+          // would let the pill say "In sync" while the new video is still
+          // loading.
           if (
             (effective === 'buffering' || effective === 'paused') &&
             positionAdvanced &&
+            !wrongVideo &&
             st.playback.playbackState === 'playing'
           ) {
             effective = 'playing';
@@ -1066,24 +1115,6 @@ export function RoomProvider({ children }) {
       } catch {
         // Ignore — next tick retries; onStateChange is the other source.
       }
-
-      // B1: which media the player has ACTUALLY loaded (computed once, used
-      // by both the duration report below and the seek guard further down).
-      let loadedId = null;
-      try {
-        loadedId = typeof player.getLoadedVideoId === 'function' ? await player.getLoadedVideoId() : null;
-      } catch {
-        loadedId = null;
-      }
-      const curTrack =
-        st.queue?.find((q) => q.queueItemId === st.currentQueueItemId)?.track ||
-        st.queue?.[0]?.track ||
-        null;
-      const mySource =
-        st.participants?.find((p) => sessionRef.current && p.id === sessionRef.current.participantId)?.source ||
-        myParticipant?.source ||
-        'youtube';
-      const expectedId = expectedMediaId(curTrack, mySource);
 
       // N-02/B2: read the real duration every tick; report it to the server
       // when it differs from the stored one, and never seek the player back
@@ -1110,11 +1141,16 @@ export function RoomProvider({ children }) {
       }
 
       if (st.playback.playbackState !== 'playing') {
+        // Round 5: while the player still holds the previous video, the
+        // reported position is the NEW track's anchor position, not the
+        // old video's frozen position — same rule as the wrong-video
+        // branch below.
+        const reportedMs = wrongVideo ? expectedMs : actualMs;
         setSyncMetrics((prev) => ({
           ...prev,
-          reportedPositionMs: Math.round(actualMs),
+          reportedPositionMs: Math.round(reportedMs),
           expectedPositionMs: Math.round(expectedMs),
-          driftMs: Math.round(actualMs - expectedMs),
+          driftMs: Math.round(reportedMs - expectedMs),
         }));
         return;
       }
@@ -1127,16 +1163,24 @@ export function RoomProvider({ children }) {
       // the current track's ID and skip the correction until they match.
       // (loadedId / expectedId were computed above, before the duration
       // report, so the report and the seek share one reading.)
-      if (loadedId && expectedId && loadedId !== expectedId) {
-        // Player is still on the previous track — report the position but
-        // do not seek. Round 4 (c): report the REAL drift instead of 0 —
-        // the old 0 masked a genuine position gap, so the pill could say
-        // "In sync" while the tabs were seconds apart.
+      if (wrongVideo) {
+        // Player is still on the previous track — report the NEW track's
+        // expected position, not the old video's. Round 5: the old code
+        // reported the player's real position here, so the UI showed the
+        // new track starting at the previous track's elapsed time. The
+        // room clock is the honest position until the new video loads;
+        // once it does, the drift loop below takes over from the player.
+        // Round 4 (c): report the REAL drift instead of 0 — the old 0
+        // masked a genuine position gap, so the pill could say "In sync"
+        // while the tabs were seconds apart. (With the reported position
+        // now equal to the expected one, the drift here is 0 by
+        // construction — the gap is visible in the player state, which
+        // reads buffering/cued until the new video starts.)
         setSyncMetrics((prev) => ({
           ...prev,
-          reportedPositionMs: Math.round(actualMs),
+          reportedPositionMs: Math.round(expectedMs),
           expectedPositionMs: Math.round(expectedMs),
-          driftMs: Math.round(actualMs - expectedMs),
+          driftMs: 0,
         }));
         return;
       }
@@ -1220,8 +1264,18 @@ export function RoomProvider({ children }) {
       // clock advance (00:25, 00:33) with no actual playback. The
       // reported position then stays at the last real player position
       // (frozen), which is honest.
+      // Round 5: only mirror while the room is PAUSED. In a playing room
+      // the mirror made a locked guest's clock advance with the host's
+      // live position (00:26 → 01:13) while its own video sat on its
+      // thumbnail — progress without playback, and the host saw a
+      // "reported" position the guest never actually reached. While
+      // playing and locked, the reported position stays at the last real
+      // player position; the read-only bar still follows the room via
+      // expectedPositionMs below.
       const mirrorReported =
-        !audioUnlockedRef.current && playerStateRef.current !== 'error';
+        !audioUnlockedRef.current &&
+        playerStateRef.current !== 'error' &&
+        st.playback.playbackState !== 'playing';
       setSyncMetrics((prev) =>
         mirrorReported
           ? {
@@ -1378,7 +1432,11 @@ export function RoomProvider({ children }) {
     await emitAck('player:ready', { ready: true }).catch(() => {});
     const st = roomStateRef.current;
     if (st?.playback && currentTrack) {
-      await applyPlaybackToPlayer(st.playback, currentTrack);
+      // Round 5: force the re-apply. The player may be cued from the
+      // pre-tap apply (which the dedup reads as "already trying"), so a
+      // plain re-apply would be swallowed and the video would stay on its
+      // thumbnail until a host action arrived.
+      await applyPlaybackToPlayer(st.playback, currentTrack, { force: true });
     }
   }, [applyPlaybackToPlayer, currentTrack, myParticipant?.source]);
 

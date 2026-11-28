@@ -260,6 +260,11 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
   // while playing). 'buffering' counts as playing — the video is on its way
   // and Pause is the honest action. With no live local state yet
   // (idle / ready / context without playerState), fall back to the server.
+  // Round 5: a cued/unstarted/idle/ready player with audio still locked is
+  // NOT playing — after a refresh it sits on the video thumbnail waiting
+  // for the tap, and falling back to the server's "playing" showed a Pause
+  // button for a silent tab. Once audio is unlocked the server fallback
+  // applies again (a cued player is then just loading).
   const serverPlaying = !isDemo && roomState?.playback?.playbackState === 'playing';
   const isPlaying = isDemo
     ? demoPlaying
@@ -267,7 +272,13 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
       ? true
       : ctxPlayerState === 'paused' || ctxPlayerState === 'ended' || ctxPlayerState === 'error'
         ? false
-        : serverPlaying;
+        : (ctxPlayerState === 'cued' ||
+              ctxPlayerState === 'unstarted' ||
+              ctxPlayerState === 'idle' ||
+              ctxPlayerState === 'ready') &&
+            !audioUnlocked
+          ? false
+          : serverPlaying;
   // R5 + flicker: prefer the server playback duration (set atomically with
   // the track on every change) over the track's stored durationSec — the
   // UI's currentTrack still points at the PREVIOUS track until queue:updated

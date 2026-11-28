@@ -1,10 +1,17 @@
+// Round 5: durationSec is the TRUE YouTube video length (verified against
+// the YouTube Data API 2026-11-28), NOT the song length. The old values
+// were song lengths, so the player's real-duration correction overwrote
+// them after every play and the queue looked corrupted (Instant Crush
+// 05:37 → 05:40, The Less I Know The Better 03:36 → 05:43 — the videos
+// really are 340s and 343s long). Midnight City 244, Instant Crush 340,
+// The Less I Know The Better 343, Starboy 274, Resonance 213.
 export const INITIAL_TRACKS = [
   {
     id: 'trk-1',
     title: 'Midnight City',
     artist: 'M83',
     album: "Hurry Up, We're Dreaming",
-    durationSec: 243,
+    durationSec: 244,
     coverImage: '/cover-midnight.jpg',
     coverGradient: 'from-violet-600 via-fuchsia-500 to-orange-400',
     accentColor: '#7c3aed',
@@ -17,7 +24,7 @@ export const INITIAL_TRACKS = [
     title: 'Instant Crush',
     artist: 'Daft Punk ft. Julian Casablancas',
     album: 'Random Access Memories',
-    durationSec: 337,
+    durationSec: 340,
     coverImage: '/cover-instant.jpg',
     coverGradient: 'from-slate-900 via-indigo-800 to-cyan-500',
     accentColor: '#4f46e5',
@@ -30,7 +37,7 @@ export const INITIAL_TRACKS = [
     title: 'The Less I Know The Better',
     artist: 'Tame Impala',
     album: 'Currents',
-    durationSec: 216,
+    durationSec: 343,
     coverImage: '/cover-indie.jpg',
     coverGradient: 'from-rose-500 via-purple-600 to-indigo-700',
     accentColor: '#e11d48',
@@ -43,7 +50,7 @@ export const INITIAL_TRACKS = [
     title: 'Starboy',
     artist: 'The Weeknd ft. Daft Punk',
     album: 'Starboy',
-    durationSec: 230,
+    durationSec: 274,
     coverImage: '/cover-synth.jpg',
     coverGradient: 'from-red-600 via-rose-600 to-amber-500',
     accentColor: '#dc2626',
@@ -56,7 +63,7 @@ export const INITIAL_TRACKS = [
     title: 'Resonance',
     artist: 'HOME',
     album: 'Odyssey',
-    durationSec: 212,
+    durationSec: 213,
     coverImage: '/cover-resonance.jpg',
     coverGradient: 'from-amber-400 via-orange-500 to-pink-600',
     accentColor: '#ea580c',

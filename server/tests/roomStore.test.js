@@ -160,6 +160,21 @@ describe('RoomStore unit tests', () => {
     expect(played.room.playback.anchorPositionMs).toBe(240000);
   });
 
+  it('correctTrackDuration stores whole seconds so queue and playing total agree (Round 5)', () => {
+    const host = store.createRoom({ name: 'Host', initialTracks: [sampleTrack, secondTrack] });
+    const tv = host.room.playback.trackVersion;
+    // The player reports a fractional-second duration (339.6s); the old
+    // code stored the float, so the queue floored to 05:39 while the
+    // playing total rounded to 05:40 for the same track.
+    const res = store.correctTrackDuration(host.room.code, host.participantId, {
+      durationMs: 339600,
+      trackVersion: tv,
+    });
+    expect(res.error).toBeUndefined();
+    expect(res.room.queue[0].track.durationSec).toBe(340);
+    expect(res.room.playback.durationMs).toBe(339600);
+  });
+
   it('correctTrackDuration accepts a valid duration and rejects bad versions/ranges (N-02, B2)', () => {
     const host = store.createRoom({ name: 'Host', initialTracks: [sampleTrack, secondTrack] });
     const tv = host.room.playback.trackVersion;

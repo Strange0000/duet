@@ -123,4 +123,46 @@ describe('RoomView renders a real room', () => {
     act(() => root.unmount());
     container.remove();
   });
+
+  // Round 5: after a refresh the guest's player cues at the room position
+  // but cannot play until the audio-unlock tap — it sits on the video
+  // thumbnail while the server still says "playing". The button must show
+  // Play (not Pause) for a silent tab.
+  it('shows Play (not Pause) for a cued player while audio is still locked', () => {
+    const ctx = makeCtx({ playerState: 'cued', audioUnlocked: false });
+    ctx.roomState.playback.playbackState = 'playing';
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    act(() => {
+      root.render(
+        <RoomContext.Provider value={ctx}>
+          <RoomView isDemo={false} onLeave={() => {}} />
+        </RoomContext.Provider>
+      );
+    });
+    expect(container.querySelector('button[aria-label="Play"]')).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Pause"]')).toBeNull();
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it('shows Pause for a cued player once audio is unlocked (still loading)', () => {
+    const ctx = makeCtx({ playerState: 'cued', audioUnlocked: true });
+    ctx.roomState.playback.playbackState = 'playing';
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    act(() => {
+      root.render(
+        <RoomContext.Provider value={ctx}>
+          <RoomView isDemo={false} onLeave={() => {}} />
+        </RoomContext.Provider>
+      );
+    });
+    expect(container.querySelector('button[aria-label="Pause"]')).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Play"]')).toBeNull();
+    act(() => root.unmount());
+    container.remove();
+  });
 });

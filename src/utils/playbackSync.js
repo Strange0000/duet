@@ -23,6 +23,14 @@ export function computeExpectedPositionMs(playback, estimatedServerNowMs) {
 }
 
 /**
+ * The placeholder duration the client sends for a pasted YouTube link
+ * (PR #4): the real length is unknown until the video plays, so 210s
+ * stands in. Any real duration may replace it — it is knowingly a guess,
+ * not a trusted value.
+ */
+export const PLACEHOLDER_DURATION_MS = 210000;
+
+/**
  * Whether the client may report a real player duration to the server
  * (player:duration, N-02).
  *
@@ -54,6 +62,16 @@ export function shouldReportRealDuration({
   if (!realDurationMs || realDurationMs <= 0) return false;
   if (!loadedId || !expectedId) return false;
   if (loadedId !== expectedId) return false;
+  // Round 5: never let a wildly wrong duration overwrite a trusted stored
+  // value. The stored length comes from the seed data or a YouTube lookup
+  // — both true video lengths — so a report that disagrees by >25% (and
+  // >15s) can only come from the wrong video's player. The two exceptions
+  // are the 210s pasted-link placeholder (knowingly a guess, so any real
+  // duration may replace it) and an unknown stored duration (0).
+  if (storedMs > 0 && Math.abs(storedMs - PLACEHOLDER_DURATION_MS) > 2000) {
+    const diffMs = Math.abs(realDurationMs - storedMs);
+    if (diffMs > 15000 && diffMs > storedMs * 0.25) return false;
+  }
   if (Math.abs(realDurationMs - storedMs) <= 2000) return false;
   if (Math.abs(realDurationMs - lastReportedMs) <= 2000) return false;
   return true;
@@ -127,6 +145,17 @@ export function resolvePlaybackStatus({
   // Never fall through to server truth here — the server still says
   // "playing", which would show "In sync" while the video is dead.
   if (effective === 'error') return 'error';
+
+  // Round 5: a cued/unstarted player is not playing anything — it is
+  // either still loading the video or stuck waiting for the audio-unlock
+  // tap (after a refresh the player cues at the room position but cannot
+  // play until the guest taps, so it sits on the thumbnail). Falling
+  // through to server truth here said "In sync" while the video was not
+  // playing. 'syncing' is honest while the room plays; 'paused' while
+  // the room is paused.
+  if (effective === 'cued' || effective === 'unstarted') {
+    return serverPlaybackState === 'playing' ? 'syncing' : 'paused';
+  }
 
   // No live local state yet (idle / ready / unknown): server truth.
   if (participantsBuffering) return 'buffering';

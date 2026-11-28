@@ -25,9 +25,9 @@ import { RoomContext } from '../src/context/RoomContext.jsx';
 import RoomView from '../src/components/RoomView.jsx';
 import { INITIAL_TRACKS } from '../src/data/mockTracks.js';
 
-const MIDNIGHT_CITY = INITIAL_TRACKS[0]; // 243s, youtubeId dX3k_QDnzHE
-const INSTANT_CRUSH = INITIAL_TRACKS[1]; // 337s, youtubeId a5uQMwRMHcs
-const LESS_I_KNOW = INITIAL_TRACKS[2]; // 216s, youtubeId sBzrzS1Ag_g
+const MIDNIGHT_CITY = INITIAL_TRACKS[0]; // 244s, youtubeId dX3k_QDnzHE
+const INSTANT_CRUSH = INITIAL_TRACKS[1]; // 340s, youtubeId a5uQMwRMHcs
+const LESS_I_KNOW = INITIAL_TRACKS[2]; // 343s, youtubeId sBzrzS1Ag_g
 
 // ---------------------------------------------------------------- R5: duration reporting
 describe('shouldReportRealDuration (R5)', () => {
@@ -66,6 +66,37 @@ describe('shouldReportRealDuration (R5)', () => {
 
   it('refuses a zero/unknown duration', () => {
     expect(shouldReportRealDuration({ ...base, realDurationMs: 0 })).toBe(false);
+  });
+
+  // Round 5: the stored lengths were song lengths, not video lengths, so
+  // the correction overwrote them after every play (Instant Crush 05:37 →
+  // 05:40, The Less I Know The Better 03:36 → 05:43 — the videos really
+  // are 340s and 343s). The seed data is fixed, and a wildly wrong report
+  // must never overwrite a trusted stored value again.
+  it('Round 5: refuses a wildly wrong duration for a trusted stored value', () => {
+    expect(
+      shouldReportRealDuration({ ...base, storedMs: 343000, realDurationMs: 216000 })
+    ).toBe(false);
+  });
+
+  it('Round 5: allows a wild report when the stored value is the 210s pasted-link placeholder', () => {
+    // The 210s placeholder is knowingly a guess (PR #4), so any real
+    // duration may replace it.
+    expect(
+      shouldReportRealDuration({ ...base, storedMs: 210000, realDurationMs: 343000 })
+    ).toBe(true);
+  });
+
+  it('Round 5: allows a wild report when the stored duration is unknown (0)', () => {
+    expect(
+      shouldReportRealDuration({ ...base, storedMs: 0, realDurationMs: 343000 })
+    ).toBe(true);
+  });
+
+  it('Round 5: allows a small disagreement (a few seconds off is a real video length)', () => {
+    expect(
+      shouldReportRealDuration({ ...base, storedMs: 337000, realDurationMs: 340000 })
+    ).toBe(true);
   });
 });
 
@@ -188,6 +219,30 @@ describe('resolvePlaybackStatus (R4)', () => {
     expect(
       resolvePlaybackStatus({ ...readyRoom, playerState: 'error', hasPartner: false })
     ).toBe('error');
+  });
+
+  // Round 5: after a refresh the guest's player cues at the room position
+  // but cannot play until the audio-unlock tap, so it sits on the video
+  // thumbnail — the old fall-through to server truth said "In sync" while
+  // nothing was playing.
+  it('Round 5: a cued player in a playing room is syncing, not in-sync', () => {
+    expect(resolvePlaybackStatus({ ...readyRoom, playerState: 'cued' })).toBe('syncing');
+  });
+
+  it('Round 5: an unstarted player in a playing room is syncing, not in-sync', () => {
+    expect(resolvePlaybackStatus({ ...readyRoom, playerState: 'unstarted' })).toBe(
+      'syncing'
+    );
+  });
+
+  it('Round 5: a cued player in a paused room is paused', () => {
+    expect(
+      resolvePlaybackStatus({
+        ...readyRoom,
+        playerState: 'cued',
+        serverPlaybackState: 'paused',
+      })
+    ).toBe('paused');
   });
 });
 
