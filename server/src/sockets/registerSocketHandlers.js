@@ -763,28 +763,7 @@ export function registerSocketHandlers(io, store, env) {
       reply(ack, { ok: true });
     });
 
-    // E-01/I-04: send a leave signal when the tab closes. The browser fires
-    // `beforeunload`/`pagehide` and Socket.IO may send a close frame, but
-    // neither guarantees the server learns the person is gone quickly. This
-    // handler is the best we can do from the server side.
-    socket.on('room:tab-close', (_raw, ack) => {
-      const { roomCode, participantId } = socket.data;
-      if (!roomCode || !participantId) return reply(ack, { ok: true });
-      // Treat like a disconnect — markDisconnected starts the grace timer.
-      // The socket.disconnect() that follows will also fire 'disconnect'.
-      reply(ack, { ok: true });
-    });
-
-    // ——— Disconnect ———
-    socket.on('disconnect', () => {
-      const pendingRoom = store.removePendingSocket(socket.id);
-      if (pendingRoom) {
-        emitRoomState(pendingRoom);
-      }
-
-      const { roomCode, participantId } = socket.data;
-      if (!roomCode || !participantId) return;
-
+    const handleDisconnect = (roomCode, participantId) => {
       // E-01: on host grace expiry, auto-promote guest and broadcast the
       // updated state (including the role change) so the guest's UI updates.
       const emitGraceExpiredState = (expiredRoom) => {
@@ -826,6 +805,36 @@ export function registerSocketHandlers(io, store, env) {
         timer.unref?.();
         disconnectPresenceTimers.set(disconnectKey, timer);
       }
+    };
+
+    // E-01/I-04: send a leave signal when the tab closes. The browser fires
+    // `beforeunload`/`pagehide` and Socket.IO may send a close frame.
+    // Handling this immediately starts the disconnect grace timer so host
+    // vanishing takes exactly the grace period (30s) instead of waiting for
+    // socket ping timeouts (~15s) first.
+    socket.on('room:tab-close', (_raw, ack) => {
+      const { roomCode, participantId } = socket.data;
+      if (!roomCode || !participantId) return reply(ack, { ok: true });
+      handleDisconnect(roomCode, participantId);
+      reply(ack, { ok: true });
+      try {
+        socket.disconnect(true);
+      } catch {
+        // ignore
+      }
+    });
+
+    // ——— Disconnect ———
+    socket.on('disconnect', () => {
+      const pendingRoom = store.removePendingSocket(socket.id);
+      if (pendingRoom) {
+        emitRoomState(pendingRoom);
+      }
+
+      const { roomCode, participantId } = socket.data;
+      if (!roomCode || !participantId) return;
+
+      handleDisconnect(roomCode, participantId);
     });
   });
 }

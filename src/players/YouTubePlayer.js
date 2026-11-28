@@ -414,6 +414,7 @@ export class YouTubePlayer extends BasePlayer {
     // instance with no recovery. Capture the same-video check first.
     const isSameVideo = this.currentVideoId === videoId;
     this.currentVideoId = videoId;
+    this.targetStartPositionMs = startPositionMs;
     await this.recoverIfFailed(videoId);
 
     const startSec = Math.max(0, startPositionMs / 1000);
@@ -539,6 +540,12 @@ export class YouTubePlayer extends BasePlayer {
     if (!this.isReady || !this.player || typeof this.player.getCurrentTime !== 'function') {
       return 0;
     }
+    // E-25: while a new video is transitioning/cueing, getCurrentTime() still
+    // returns the preceding video's current position (e.g. 19s). Check if the
+    // loaded video matches currentVideoId; if not, return target start pos (0).
+    if (this.currentVideoId && this.readLoadedVideoId() !== this.currentVideoId) {
+      return this.targetStartPositionMs || 0;
+    }
     return Math.max(0, Math.round(this.player.getCurrentTime() * 1000));
   }
 
@@ -568,16 +575,7 @@ export class YouTubePlayer extends BasePlayer {
   }
 
   async getLoadedVideoId() {
-    try {
-      const url = this.player?.getVideoUrl?.();
-      if (typeof url === 'string' && url) {
-        const v = new URL(url).searchParams.get('v');
-        if (v && /^[A-Za-z0-9_-]{11}$/.test(v)) return v;
-      }
-    } catch {
-      // Fall through to currentVideoId
-    }
-    return this.currentVideoId || null;
+    return this.readLoadedVideoId() || null;
   }
 
   async getState() {
