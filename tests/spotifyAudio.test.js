@@ -37,6 +37,27 @@ describe('Spotify Audio Only', () => {
     await expect(resolveSpotifyUri(track, 'test-token')).resolves.toBeNull();
   });
 
+  it('rejects when the SDK connects but never reports a ready device', async () => {
+    vi.useFakeTimers();
+    localStorage.setItem('duet_spotify_auth', JSON.stringify({
+      accessToken: 'test-token',
+      expiresAt: Date.now() + 3600000,
+    }));
+    vi.stubGlobal('Spotify', {
+      Player: function () {
+        return { addListener: vi.fn(), connect: vi.fn().mockResolvedValue(true) };
+      },
+    });
+
+    try {
+      const initialization = expect(new SpotifyPlayer().initialize()).rejects.toThrow('Spotify did not become ready');
+      await vi.advanceTimersByTimeAsync(15000);
+      await initialization;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('cues a paused room and requests the original URI at the current seek position on play', async () => {
     localStorage.setItem('duet_spotify_auth', JSON.stringify({
       accessToken: 'test-token',

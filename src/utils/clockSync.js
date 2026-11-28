@@ -22,7 +22,8 @@ export class ClockSync {
       try {
         const pong = await emitPing({ clientSentAtMs: wallStart, seq: i });
         const monoEnd = performance.now();
-        if (!pong || !pong.ok) continue;
+        if (!pong?.ok ||
+            !Number.isFinite(pong.serverReceivedAtMs) || !Number.isFinite(pong.serverSentAtMs)) continue;
 
         const rtt = Math.max(0, monoEnd - monoStart);
         const serverMid = (pong.serverReceivedAtMs + pong.serverSentAtMs) / 2;

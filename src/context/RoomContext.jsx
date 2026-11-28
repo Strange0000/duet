@@ -379,9 +379,14 @@ export function RoomProvider({ children }) {
       const res = await emitAck('sync:request', {}, 10000);
       const next = res?.state;
       if (!next) return;
-      if ((next.roomVersion ?? 0) < (roomStateRef.current?.roomVersion ?? 0)) return;
+      const current = roomStateRef.current;
+      if (current && (next.roomCode !== current.roomCode ||
+          (next.roomVersion ?? 0) < (current.roomVersion ?? 0))) return;
+      if (!adoptedRef.current) return;
       setRoomState(next);
-      seedPositionFromPlayback(next.playback);
+      if (!audioUnlockedRef.current || next.playback?.trackVersion !== current?.playback?.trackVersion) {
+        seedPositionFromPlayback(next.playback);
+      }
     } catch {
       // Best-effort only — the adopted join state is still usable.
     }
@@ -452,39 +457,46 @@ export function RoomProvider({ children }) {
       playWatchdogAttemptRef.current = 0;
       advancingYoutubeSamplesRef.current = 0;
 
-      // Safari gets a longer window and a retry that leaves its buffer intact.
+      const isCurrentPlayback = () => playerRef.current === player &&
+        lastAppliedPlaybackRef.current === signature &&
+        computePlaybackSignature(track, roomStateRef.current?.playback) === signature;
+
       const armStallWatchdog = (anchorMs) => {
-        if (playWatchdogTimerRef.current || playWatchdogAttemptRef.current >= 2) return;
+        if (playWatchdogTimerRef.current || playWatchdogAttemptRef.current >= 2 || !isCurrentPlayback()) return;
+        let bufferedFraction = isYouTube ? player.getBufferedFraction() : 0;
         const check = async () => {
           playWatchdogTimerRef.current = null;
-          const state = roomStateRef.current?.playback;
-          if ((!appleMobile && !audioUnlockedRef.current) || playerRef.current !== player ||
-              state?.playbackState !== 'playing' ||
-              computePlaybackSignature(track, state) !== signature ||
-              lastAppliedPlaybackRef.current !== signature) return;
+          if (!isCurrentPlayback() || document.hidden || (!appleMobile && !audioUnlockedRef.current)) return;
 
           const [playerStatus, position] = await Promise.all([
             player.getState().catch(() => 'idle'),
             player.getPosition().catch(() => anchorMs),
           ]);
-          if (playerRef.current !== player || lastAppliedPlaybackRef.current !== signature ||
-              computePlaybackSignature(track, roomStateRef.current?.playback) !== signature ||
-              (!appleMobile && !audioUnlockedRef.current) || playerStatus === 'error' ||
-              (playerStatus === 'playing' && position - anchorMs >= 500)) return;
+          if (!isCurrentPlayback() || document.hidden || playerStatus === 'error' || playerStatus === 'ended' ||
+              (!audioUnlockedRef.current && (!appleMobile || playerStatus !== 'buffering'))) return;
+
+          const loadedFraction = isYouTube ? player.getBufferedFraction() : 0;
+          if (position - anchorMs >= 500 || loadedFraction > bufferedFraction + 0.001) {
+            anchorMs = position;
+            bufferedFraction = loadedFraction;
+            if (playerStatus !== 'playing') {
+              playWatchdogTimerRef.current = setTimeout(check, appleMobile ? 12000 : 7500);
+            }
+            return;
+          }
 
           if (playWatchdogAttemptRef.current === 0) {
             playWatchdogAttemptRef.current = 1;
-            if (appleMobile) {
-              if (audioUnlockedRef.current) player.retrySlowPlayback();
-              anchorMs = position;
-            } else if (isYouTube) {
-              anchorMs = computeExpectedPositionMs(roomStateRef.current?.playback, clockSyncRef.current.estimateServerNowMs());
-              player.restartPlayback(anchorMs);
-            } else {
+            if (isYouTube && audioUnlockedRef.current) {
+              if (!appleMobile || !player.retrySlowPlayback()) {
+                const latest = roomStateRef.current.playback;
+                anchorMs = computeExpectedPositionMs(latest, clockSyncRef.current.estimateServerNowMs());
+                player.restartPlayback(anchorMs);
+              }
+            } else if (!isYouTube) {
               await player.play().catch(() => {});
             }
-            if (playerRef.current === player && lastAppliedPlaybackRef.current === signature &&
-                (appleMobile || audioUnlockedRef.current)) {
+            if (isCurrentPlayback()) {
               clearTimeout(playWatchdogTimerRef.current);
               playWatchdogTimerRef.current = setTimeout(check, appleMobile ? 12000 : 7500);
             }
@@ -495,7 +507,7 @@ export function RoomProvider({ children }) {
           setPlayerError({
             code: 'PLAY_STALLED',
             message: appleMobile
-              ? 'YouTube is taking longer to start. Tap Play inside the video or choose Resume video here.'
+              ? 'Video playback stalled on this phone. Tap Resume video to rejoin at the current position.'
               : 'Playback is stalled. Try Reload player, or skip this track.',
           });
         };
@@ -548,7 +560,7 @@ export function RoomProvider({ children }) {
         return;
       }
 
-      if (playerRef.current !== player) return;
+      if (!isCurrentPlayback()) return;
       if (playback.playbackState === 'playing' && !audioUnlockedRef.current) return;
 
       if (playback.playbackState === 'playing') {
@@ -558,7 +570,7 @@ export function RoomProvider({ children }) {
             : 0;
 
         const start = async (positionMs) => {
-          if (playerRef.current !== player || lastAppliedPlaybackRef.current !== signature || !audioUnlockedRef.current) return;
+          if (!isCurrentPlayback() || !audioUnlockedRef.current) return;
           if (player instanceof YouTubePlayer) {
             await player.play(positionMs);
           } else {
@@ -681,11 +693,10 @@ export function RoomProvider({ children }) {
         onEnded: () => {
           if (!isCurrent()) return;
           const st = roomStateRef.current;
-          if (sessionRef.current && st?.playback) {
-            emitAck('player:status', {
-              endedTrackVersion: st.playback.trackVersion,
-            }).catch(() => {});
-          }
+          const track = st?.queue.find((item) => item.queueItemId === st.currentQueueItemId)?.track;
+          if (!sessionRef.current || !track || st.playback?.playbackState !== 'playing' ||
+              loadedTrackKeyRef.current !== `${track.id}:${st.playback.trackVersion}`) return;
+          emitAck('player:status', { endedTrackVersion: st.playback.trackVersion }).catch(() => {});
         },
         onAutoplayBlocked: () => {
           if (!isCurrent()) return;
@@ -1046,21 +1057,39 @@ export function RoomProvider({ children }) {
   const playbackSignature = computePlaybackSignature(currentTrack, roomState?.playback);
   const playbackDurationMs = roomState?.playback?.durationMs;
   useEffect(() => {
+    const player = playerRef.current;
+    if (player instanceof LocalAudioPlayer && playbackDurationMs > 0) player.setDuration(playbackDurationMs);
+  }, [playbackDurationMs]);
+  useEffect(() => {
     if (!playbackSignature) return;
     const state = roomStateRef.current;
     const track = state?.queue.find((item) => item.queueItemId === state.currentQueueItemId)?.track;
     if (track) applyPlaybackToPlayer(state.playback, track).catch(() => {});
-  }, [applyPlaybackToPlayer, playbackSignature, playbackDurationMs]);
+  }, [applyPlaybackToPlayer, playbackSignature]);
 
   // Periodic drift measurement & correction loop (every 1000ms while playing)
   useEffect(() => {
-    if (!roomState?.roomCode || !audioUnlocked) return;
-    const interval = setInterval(async () => {
+    if (!roomState?.roomCode) return;
+    let reading = false;
+    const reportPosition = (status) => {
+      const socket = getSocket();
+      if (socket.connected && adoptedRef.current) socket.volatile.emit('player:status', status);
+    };
+    const poll = async () => {
       const player = playerRef.current;
       const st = roomStateRef.current;
-      if (!player || !st?.playback) return;
+      if (!player || !st?.playback || document.hidden) return;
+      if (!audioUnlockedRef.current) {
+        if (player instanceof YouTubePlayer && await player.getState() === 'buffering' &&
+            playerRef.current === player && st.playback.playbackState === 'playing') {
+          monitorPlaybackRef.current?.(lastPlayerPositionRef.current);
+        }
+        return;
+      }
 
       const actualMs = await player.getPosition();
+      if (!Number.isFinite(actualMs) || playerRef.current !== player ||
+          roomStateRef.current?.playback?.trackVersion !== st.playback.trackVersion) return;
       const estimatedNow = clockSyncRef.current.estimateServerNowMs();
       const expectedMs = computeExpectedPositionMs(st.playback, estimatedNow);
 
@@ -1148,7 +1177,8 @@ export function RoomProvider({ children }) {
       } catch {
         realDurationMs = 0;
       }
-      if (playerRef.current !== player || roomStateRef.current?.playback?.trackVersion !== st.playback.trackVersion) return;
+      if (playerRef.current !== player ||
+          computePlaybackSignature(curTrack, roomStateRef.current?.playback) !== computePlaybackSignature(curTrack, st.playback)) return;
       if (realDurationMs > 0 && !(player instanceof LocalAudioPlayer)) {
         // Round 4 (a): only report once the player has actually started
         // this track — an errored player's getDuration() returns the
@@ -1183,8 +1213,8 @@ export function RoomProvider({ children }) {
       }
 
       if (st.playback.playbackState !== 'playing') {
-        if (typeof actualMs === 'number' && Math.round(actualMs) !== st.participants?.find((p) => p.id === sessionRef.current?.participantId)?.reportedPositionMs) {
-          emitAck('player:status', { reportedPositionMs: Math.round(actualMs) }).catch(() => {});
+        if (Math.round(actualMs) !== st.participants?.find((p) => p.id === sessionRef.current?.participantId)?.reportedPositionMs) {
+          reportPosition({ reportedPositionMs: Math.round(actualMs) });
         }
         setSyncMetrics((prev) => ({
           ...prev,
@@ -1228,6 +1258,8 @@ export function RoomProvider({ children }) {
           lastCorrectionAtRef.current = Date.now();
           advancingYoutubeSamplesRef.current = 0;
           await player.seek(evaluation.targetMs);
+          if (playerRef.current !== player ||
+              computePlaybackSignature(curTrack, roomStateRef.current?.playback) !== computePlaybackSignature(curTrack, st.playback)) return;
           setSyncMetrics((prev) => ({
             ...prev,
             reportedPositionMs: Math.round(evaluation.targetMs),
@@ -1245,14 +1277,22 @@ export function RoomProvider({ children }) {
         }));
       }
 
-      emitAck('player:status', {
+      reportPosition({
         reportedPositionMs: Math.round(actualMs),
         driftMs: evaluation.driftMs,
-      }).catch(() => {});
+        buffering: effectivePlayerState === 'buffering',
+      });
+    };
+    const interval = setInterval(() => {
+      if (reading) return;
+      reading = true;
+      poll().catch(() => {}).finally(() => {
+        reading = false;
+      });
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [roomState?.roomCode, audioUnlocked, reportRealDuration]);
+  }, [roomState?.roomCode, reportRealDuration]);
 
   // M8: keep syncMetrics.expectedPositionMs fresh even when audio is not
   // unlocked yet (the drift loop above only runs when audioUnlocked, which
@@ -1466,8 +1506,11 @@ export function RoomProvider({ children }) {
 
   const startYouTubeFromGesture = useCallback((positionMs) => {
     const player = playerRef.current;
-    const playback = roomStateRef.current?.playback;
-    if (!(player instanceof YouTubePlayer) || playback?.playbackState !== 'paused' ||
+    const state = roomStateRef.current;
+    const playback = state?.playback;
+    const track = state?.queue.find((item) => item.queueItemId === state.currentQueueItemId)?.track;
+    if (!(player instanceof YouTubePlayer) || playback?.playbackState !== 'paused' || !track ||
+        loadedTrackKeyRef.current !== `${track.id}:${playback.trackVersion}` ||
         !player.resumeFromGesture(positionMs)) return null;
 
     return () => {
@@ -1485,8 +1528,9 @@ export function RoomProvider({ children }) {
     const player = playerRef.current;
     const state = roomStateRef.current;
     const playback = state?.playback;
-    const source = state?.participants.find((participant) => participant.id === sessionRef.current?.participantId)?.source ?? 'youtube';
-    if (player instanceof YouTubePlayer && playback?.playbackState === 'playing') {
+    const current = state?.queue.find((item) => item.queueItemId === state.currentQueueItemId)?.track;
+    if (player instanceof YouTubePlayer && playback?.playbackState === 'playing' && current &&
+        loadedTrackKeyRef.current === `${current.id}:${playback.trackVersion}`) {
       const position = computeExpectedPositionMs(playback, clockSyncRef.current.estimateServerNowMs());
       if (player.resumeFromGesture(position, { restart }) && restart) setPlayerError(null);
     }
@@ -1497,11 +1541,8 @@ export function RoomProvider({ children }) {
         setAudioUnlocked(false);
         return;
       }
-    } else if (source !== 'youtube') {
-      await Promise.all([
-        player instanceof SpotifyPlayer ? player.unlockAudio() : undefined,
-        backgroundAudio.unlock(),
-      ]);
+    } else if (player instanceof SpotifyPlayer) {
+      await player.unlockAudio();
     }
     const st = roomStateRef.current;
     const track = st?.queue?.find((item) => item.queueItemId === st.currentQueueItemId)?.track;
@@ -1674,7 +1715,7 @@ export function RoomProvider({ children }) {
     if (roomState?.roomCode) {
       backgroundAudio.setPlaying(
         Boolean(currentTrack) && roomState?.playback?.playbackState === 'playing' && audioUnlocked,
-        (myParticipant?.source ?? 'youtube') !== 'youtube'
+        myParticipant?.source === 'local'
       );
     }
   }, [audioUnlocked, currentTrack?.id, myParticipant?.source, roomState?.roomCode, roomState?.playback?.playbackState, roomState?.playback?.trackVersion]);

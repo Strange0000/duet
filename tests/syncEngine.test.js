@@ -11,6 +11,15 @@ import {
 } from '../src/utils/playbackSync.js';
 
 describe('ClockSync & PlaybackSync', () => {
+  it('keeps a usable clock when a ping acknowledgment is missing timestamps', async () => {
+    const clock = new ClockSync();
+    await clock.sync(async () => ({ ok: true }), 1);
+
+    expect(clock.getMetrics().sampleCount).toBe(0);
+    expect(clock.getMetrics().clockOffsetMs).toBe(0);
+    expect(Number.isFinite(clock.estimateServerNowMs())).toBe(true);
+  });
+
   it('computes expected position accurately for playing and paused states', () => {
     const playing = {
       playbackState: 'playing',

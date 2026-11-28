@@ -1579,7 +1579,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                   onClick={() => unlockAudio({ restart: true })}
                   className="min-h-11 rounded-full bg-white/15 px-3 font-semibold text-white hover:bg-white/25 cursor-pointer"
                 >
-                  Resume video here
+                  Resume video
                 </button>
               )}
               {playerError && ctxReloadPlayer && (
@@ -1589,7 +1589,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                     try {
                       const ok = await ctxReloadPlayer();
                       if (ok) showToast('Player reloaded — resuming playback');
-                      else showToast('YouTube is still unavailable');
+                      else showToast('The player is still unavailable');
                     } finally {
                       setReloadingPlayer(false);
                     }
@@ -1820,10 +1820,17 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                 <div className="room-stage relative mt-6 space-y-5">
                   {hasVideo && (
                     <div>
-                      {nativeAppleStart && serverPlaying && (
-                        <p role="status" className="mb-2 rounded-xl border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-sm font-semibold text-white">
-                          Tap Play inside the YouTube video to join playback.
-                        </p>
+                      {nativeAppleStart && serverPlaying && !playerError && (
+                        <div className="room-unlock mb-2 flex flex-wrap items-center justify-between gap-2 rounded-xl px-3 py-2">
+                          <p role="status" className="text-sm font-semibold">
+                            Tap Play inside the YouTube video to join playback.
+                          </p>
+                          {['cued', 'paused', 'unstarted'].includes(ctxPlayerState) && (
+                            <button className="room-button" type="button" onClick={() => unlockAudio()}>
+                              Start video
+                            </button>
+                          )}
+                        </div>
                       )}
                       <div className="room-video overflow-hidden rounded-2xl border border-white/10 bg-black">
                         <div ref={ytContainerRef} className="room-video-frame relative aspect-video min-h-[200px] w-full" />

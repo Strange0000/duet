@@ -15,46 +15,43 @@ function loadSpotifySDK() {
   if (sdkPromise) return sdkPromise;
 
   sdkPromise = new Promise((resolve, reject) => {
-    let settled = false;
+    const src = 'https://sdk.scdn.co/spotify-player.js';
+    const existingScript = document.querySelector(`script[src="${src}"]`);
+    const script = existingScript || document.createElement('script');
     const prevReady = window.onSpotifyWebPlaybackSDKReady;
 
     const cleanup = () => {
       clearTimeout(timer);
       clearInterval(poll);
+      script.removeEventListener('error', fail);
+      if (window.onSpotifyWebPlaybackSDKReady === ready) window.onSpotifyWebPlaybackSDKReady = prevReady;
     };
-    const fail = (err) => {
-      if (settled) return;
-      settled = true;
+    const fail = () => {
       cleanup();
+      script.remove();
       sdkPromise = null;
-      reject(err);
+      reject(new Error('Spotify player failed to load. Check your connection or try Reload player.'));
     };
     const succeed = () => {
-      if (settled) return;
-      if (!window.Spotify || !window.Spotify.Player) return;
-      settled = true;
+      if (!window.Spotify?.Player) return;
       cleanup();
       resolve(window.Spotify);
     };
-
-    // 15s timeout + polling: if the script tag already exists but the SDK
-    // never loads (ad-blocker, failed earlier load), never hang forever (N-07).
-    const timer = setTimeout(
-      () => fail(new Error('Spotify player failed to load — check your connection or ad-blocker')),
-      SPOTIFY_LOAD_TIMEOUT_MS
-    );
-    const poll = setInterval(succeed, 250);
-
-    window.onSpotifyWebPlaybackSDKReady = () => {
-      if (typeof prevReady === 'function') prevReady();
-      succeed();
+    const ready = () => {
+      try {
+        prevReady?.();
+      } finally {
+        succeed();
+      }
     };
 
-    if (!document.querySelector('script[src="https://sdk.scdn.co/spotify-player.js"]')) {
-      const script = document.createElement('script');
-      script.src = 'https://sdk.scdn.co/spotify-player.js';
+    const timer = setTimeout(fail, SPOTIFY_LOAD_TIMEOUT_MS);
+    const poll = setInterval(succeed, 250);
+    script.addEventListener('error', fail, { once: true });
+    window.onSpotifyWebPlaybackSDKReady = ready;
+    if (!existingScript) {
+      script.src = src;
       script.async = true;
-      script.onerror = () => fail(new Error('Failed to load Spotify Web Playback SDK'));
       document.head.appendChild(script);
     }
   });
@@ -101,7 +98,15 @@ export class SpotifyPlayer extends BasePlayer {
 
     await new Promise((resolve, reject) => {
       let settled = false;
-      this.player = new Spotify.Player({
+      const finish = (error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (error) reject(error);
+        else resolve();
+      };
+      const timer = setTimeout(() => finish(new Error('Spotify did not become ready. Try Reload player.')), SPOTIFY_LOAD_TIMEOUT_MS);
+      const player = new Spotify.Player({
         name: 'Duet Synced Player',
         getOAuthToken: async (cb) => {
           const fresh = await getValidSpotifyToken();
@@ -119,56 +124,50 @@ export class SpotifyPlayer extends BasePlayer {
         volume: this.muted ? 0 : this.volume,
       });
 
-      this.player.addListener('ready', ({ device_id }) => {
+      this.player = player;
+      const listen = (event, handler) => player.addListener(event, (...args) => {
+        if (this.player === player) handler(...args);
+      });
+
+      listen('ready', ({ device_id }) => {
         this.deviceId = device_id;
         this.isReady = true;
         this.state = 'ready';
         this.callbacks.onReady?.();
-        if (!settled) {
-          settled = true;
-          resolve();
-        }
+        finish();
       });
 
-      this.player.addListener('not_ready', () => {
+      listen('not_ready', () => {
         this.isReady = false;
+        this.deviceId = null;
+        this.state = 'buffering';
+        this.callbacks.onStateChange?.('buffering');
       });
 
-      this.player.addListener('initialization_error', ({ message }) => {
-        const err = { code: 'SPOTIFY_INIT', message };
-        this.callbacks.onError?.(err);
-        if (!settled) {
-          settled = true;
-          reject(new Error(message));
-        }
-      });
+      const fail = (code, message) => {
+        this.callbacks.onError?.({ code, message });
+        finish(new Error(message));
+      };
 
-      this.player.addListener('authentication_error', ({ message }) => {
-        const err = { code: 'SPOTIFY_AUTH', message: `Spotify auth error: ${message}` };
-        this.callbacks.onError?.(err);
-        if (!settled) {
-          settled = true;
-          reject(new Error(err.message));
-        }
-      });
+      listen('initialization_error', ({ message }) => fail('SPOTIFY_INIT', message));
+      listen('authentication_error', ({ message }) => fail('SPOTIFY_AUTH', `Spotify auth error: ${message}`));
+      listen('account_error', () => fail(
+        'SPOTIFY_PREMIUM_REQUIRED',
+        'Spotify Premium is required to stream music in the browser. Choose YouTube if you use Spotify Free.',
+      ));
 
-      this.player.addListener('account_error', () => {
-        const err = {
-          code: 'SPOTIFY_PREMIUM_REQUIRED',
-          message: 'Spotify Premium is required to stream music in the browser. Choose YouTube if you use Spotify Free.',
-        };
-        this.callbacks.onError?.(err);
-        if (!settled) {
-          settled = true;
-          reject(new Error(err.message));
-        }
-      });
-
-      this.player.addListener('playback_error', ({ message }) => {
+      listen('playback_error', ({ message }) => {
+        this.state = 'error';
+        this.callbacks.onStateChange?.('error');
         this.callbacks.onError?.({ code: 'SPOTIFY_PLAYBACK', message });
       });
 
-      this.player.addListener('player_state_changed', (state) => {
+      listen('autoplay_failed', () => {
+        this.state = 'paused';
+        this.callbacks.onStateChange?.('paused');
+        this.callbacks.onAutoplayBlocked?.();
+      });
+      listen('player_state_changed', (state) => {
         if (!state || !this.trackStarted || state.track_window?.current_track?.uri !== this.currentUri) return;
         this.lastPositionMs = state.position || 0;
         this.lastDurationMs = state.duration || 0;
@@ -193,12 +192,9 @@ export class SpotifyPlayer extends BasePlayer {
         this.callbacks.onStateChange?.(nextState);
       });
 
-      this.player.connect().then((success) => {
-        if (!success && !settled) {
-          settled = true;
-          reject(new Error('Could not connect Spotify Web Playback SDK'));
-        }
-      });
+      player.connect().then((success) => {
+        if (!success) finish(new Error('Could not connect Spotify Web Playback SDK'));
+      }).catch(finish);
     });
   }
 

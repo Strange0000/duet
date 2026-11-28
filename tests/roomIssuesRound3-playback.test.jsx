@@ -311,6 +311,41 @@ describe('YouTubePlayer (R1 first Play, R5 stale duration)', () => {
     container.remove();
   });
 
+  it('detects native playback when Safari misses the playing event', async () => {
+    const onStateChange = vi.fn();
+    const player = new YouTubePlayer({ onStateChange });
+    const container = makeContainer();
+    await initPlayer(player, container);
+    await player.loadTrack(MIDNIGHT_CITY, 0, false);
+    fakePlayer.getPlayerState = vi.fn(() => window.YT.PlayerState.PLAYING);
+    videoUrl = 'https://www.youtube.com/watch?v=dX3k_QDnzHE';
+
+    await expect(player.getState()).resolves.toBe('playing');
+    await player.getState();
+    expect(onStateChange.mock.calls.filter(([state]) => state === 'playing')).toHaveLength(1);
+    expect(fakePlayer.loadVideoById).not.toHaveBeenCalled();
+    await player.destroy();
+    container.remove();
+  });
+
+  it('ignores an ended event for the old video while the next video loads', async () => {
+    const onEnded = vi.fn();
+    const player = new YouTubePlayer({ onEnded });
+    const container = makeContainer();
+    await initPlayer(player, container);
+    await player.loadTrack(MIDNIGHT_CITY, 0, true);
+    videoUrl = 'https://www.youtube.com/watch?v=dX3k_QDnzHE';
+    capturedEvents.onStateChange({ data: window.YT.PlayerState.PLAYING });
+
+    await player.loadTrack(INSTANT_CRUSH, 0, true);
+    capturedEvents.onStateChange({ data: window.YT.PlayerState.ENDED });
+
+    expect(onEnded).not.toHaveBeenCalled();
+    await expect(player.getState()).resolves.toBe('buffering');
+    await player.destroy();
+    container.remove();
+  });
+
   it('ignores late playback events from a replaced iframe', async () => {
     const onEnded = vi.fn();
     const player = new YouTubePlayer({ onEnded });
@@ -447,16 +482,18 @@ describe('YouTubePlayer (R1 first Play, R5 stale duration)', () => {
     container.remove();
   });
 
-  it('R1: loadTrack on the same video with shouldPlay plays it (not just seeks)', async () => {
+  it('starts the same cued video at the requested position without flushing its buffer with a seek)', async () => {
     const player = new YouTubePlayer({});
     const container = makeContainer();
     await initPlayer(player, container);
     await player.loadTrack(MIDNIGHT_CITY, 0, false);
     fakePlayer.seekTo.mockClear();
     await player.loadTrack(MIDNIGHT_CITY, 5000, true);
-    expect(fakePlayer.seekTo).toHaveBeenCalledWith(5, true);
-    // Never played yet, so the play must force-load rather than playVideo().
-    expect(fakePlayer.loadVideoById).toHaveBeenCalled();
+    expect(fakePlayer.seekTo).not.toHaveBeenCalled();
+    expect(fakePlayer.loadVideoById).toHaveBeenCalledWith({
+      videoId: MIDNIGHT_CITY.youtubeId,
+      startSeconds: 5,
+    });
     container.remove();
   });
 
