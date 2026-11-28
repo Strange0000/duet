@@ -1,5 +1,5 @@
 import React from 'react';
-import { Copy, Link2, UserRound } from 'lucide-react';
+import { Copy, Share2, UserRound } from 'lucide-react';
 
 const SOURCE_LABELS = {
   youtube: 'YouTube',
@@ -115,8 +115,8 @@ export default function RoomLobby({
             <button type="button" onClick={invite.onCopyCode}>
               <Copy size={16} aria-hidden="true" /> {invite.copiedCode ? 'Code copied' : invite.code}
             </button>
-            <button type="button" onClick={invite.onCopyLink}>
-              <Link2 size={16} aria-hidden="true" /> {invite.copiedLink ? 'Link copied' : 'Copy invite link'}
+            <button type="button" onClick={invite.onShareLink || invite.onCopyLink}>
+              <Share2 size={16} aria-hidden="true" /> {invite.copiedLink ? 'Link copied' : 'Share invite'}
             </button>
           </div>
         </section>
