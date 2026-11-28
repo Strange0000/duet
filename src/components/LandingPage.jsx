@@ -74,7 +74,10 @@ function friendlyRoomError(err) {
     return 'Room not found or expired. Check the code, ask the host for a new link, or start your own room.';
   }
   if (/full|ROOM_FULL/i.test(text)) {
-    return 'That room is already full (2 people max). Ask the host for a new link, or start your own room.';
+    // The server error carries the real limit ("maximum 6 participants");
+    // use it so this message stays correct if the limit changes again.
+    const limit = text.match(/maximum (\d+) participants/i)?.[1] || '6';
+    return `That room is already full (${limit} people max). Ask the host for a new link, or start your own room.`;
   }
   return text;
 }

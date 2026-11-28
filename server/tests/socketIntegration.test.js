@@ -92,26 +92,27 @@ describe('Duet Backend HTTP & Socket.IO Integration', () => {
       const tooShort = await emitAck(hostSocket, 'player:duration', { durationMs: 5000, trackVersion: tv });
       expect(tooShort.ok).toBe(false);
 
-      // Host socket was attached at creation (N-04): a fresh join attempt by a
-      // third socket still sees the room as full, i.e. the host occupies a slot.
-      const thirdSocket = ioc(url, { transports: ['websocket'] });
-      const fourthSocket = ioc(url, { transports: ['websocket'] });
-      await Promise.all([
-        new Promise((r) => thirdSocket.on('connect', r)),
-        new Promise((r) => fourthSocket.on('connect', r)),
-      ]);
+      // Host socket was attached at creation (N-04): the host occupies a slot,
+      // so the room fills at 6 participants (host + 5 guests). The 7th join
+      // is proven ROOM_FULL in the lifecycle test below — this file shares
+      // one 15-join/minute IP rate limit, so this test fills the room and
+      // checks the count via the API instead of spending a 7th join here.
+      const guestSockets = Array.from({ length: 5 }, () => ioc(url, { transports: ['websocket'] }));
+      await Promise.all(guestSockets.map((s) => new Promise((r) => s.on('connect', r))));
       try {
-        const guest = await emitAck(thirdSocket, 'room:join', { roomCode: created.roomCode, name: 'Guest' });
-        expect(guest.ok).toBe(true);
-        const third = await emitAck(fourthSocket, 'room:join', {
-          roomCode: created.roomCode,
-          name: 'Third',
-        });
-        expect(third.ok).toBe(false);
-        expect(third.code).toBe('ROOM_FULL');
+        for (let i = 0; i < 5; i += 1) {
+          const guest = await emitAck(guestSockets[i], 'room:join', {
+            roomCode: created.roomCode,
+            name: `Guest${i + 1}`,
+          });
+          expect(guest.ok).toBe(true);
+        }
+        const info = await request(app).get(`/api/rooms/${created.roomCode}`);
+        expect(info.status).toBe(200);
+        expect(info.body.participantCount).toBe(6);
+        expect(info.body.maxParticipants).toBe(6);
       } finally {
-        thirdSocket.disconnect();
-        fourthSocket.disconnect();
+        guestSockets.forEach((s) => s.disconnect());
       }
     } finally {
       hostSocket.disconnect();
@@ -270,11 +271,14 @@ describe('Duet Backend HTTP & Socket.IO Integration', () => {
     const hostSocket = ioc(url, { transports: ['websocket'] });
     const guestSocket = ioc(url, { transports: ['websocket'] });
     const thirdSocket = ioc(url, { transports: ['websocket'] });
+    // Extra guests to fill the room to its 6-person limit (host + Aarav + 4).
+    const extraSockets = Array.from({ length: 4 }, () => ioc(url, { transports: ['websocket'] }));
 
     await Promise.all([
       new Promise((r) => hostSocket.on('connect', r)),
       new Promise((r) => guestSocket.on('connect', r)),
       new Promise((r) => thirdSocket.on('connect', r)),
+      ...extraSockets.map((s) => new Promise((r) => s.on('connect', r))),
     ]);
 
     try {
@@ -312,7 +316,11 @@ describe('Duet Backend HTTP & Socket.IO Integration', () => {
       expect(joined.ok).toBe(true);
       expect(joined.role).toBe('guest');
 
-      // 3. Third participant rejected
+      // 3. Room fills to 6, then the 7th participant is rejected
+      for (let i = 0; i < extraSockets.length; i += 1) {
+        const extra = await emitAck(extraSockets[i], 'room:join', { roomCode, name: `Guest${i + 2}` });
+        expect(extra.ok).toBe(true);
+      }
       const third = await emitAck(thirdSocket, 'room:join', { roomCode, name: 'Intruder' });
       expect(third.ok).toBe(false);
       expect(third.code).toBe('ROOM_FULL');
@@ -358,6 +366,7 @@ describe('Duet Backend HTTP & Socket.IO Integration', () => {
       hostSocket.disconnect();
       guestSocket.disconnect();
       thirdSocket.disconnect();
+      extraSockets.forEach((s) => s.disconnect());
     }
   });
 });
