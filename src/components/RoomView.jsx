@@ -1350,7 +1350,8 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                 aria-label="Share invite link"
               >
                 <span className="inline-flex items-center gap-1 sm:hidden">
-                  <Share2 size={16} aria-hidden="true" /> Share
+                  <Share2 size={16} aria-hidden="true" />
+                  <span className="room-invite-short-label">Share</span>
                 </span>
                 <span className="hidden sm:inline">Share invite</span>
               </button>

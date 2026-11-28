@@ -319,6 +319,24 @@
   font-weight: 700;
 }
 
+/* Keep the compact header inside the viewport with full-size touch targets. */
+.duet-room[data-compact="true"] :is(.room-code, .room-invite) {
+  gap: 0.25rem;
+  padding-inline: 0.5rem;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.duet-room[data-compact="true"] .room-code {
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 359px) {
+  .duet-room[data-compact="true"] .room-invite-short-label {
+    display: none;
+  }
+}
+
 .duet-room .room-desktop-tabs .room-button {
   min-width: 0;
   gap: .375rem;
