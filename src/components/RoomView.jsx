@@ -1136,7 +1136,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
             <button
               onClick={handleCopyCode}
               className="room-code inline-flex shrink-0 items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-bold tracking-wider text-white transition hover:bg-white/10 cursor-pointer"
-              title="Copy room code"
+              aria-label={copied ? 'Room code copied' : `Copy room code ${roomCode}`}
             >
               <span>{roomCode}</span>
               {copied ? (
@@ -1197,7 +1197,9 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                 className="room-invite inline-flex shrink-0 items-center gap-1 rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-semibold text-zinc-300 transition hover:bg-white/10 cursor-pointer"
                 aria-label={copiedLink ? 'Invite link copied' : 'Copy invite link'}
               >
-                <span className="sm:hidden">{copiedLink ? 'Copied!' : 'Invite'}</span>
+                <span className="sm:hidden">
+                  {copiedLink ? <Check size={16} aria-hidden="true" /> : 'Invite'}
+                </span>
                 <span className="hidden sm:inline">{copiedLink ? 'Copied!' : 'Copy Invite Link'}</span>
               </button>
             )}

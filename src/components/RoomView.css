@@ -343,6 +343,12 @@
     letter-spacing: 0;
   }
 
+  .room-invite {
+    min-width: 44px;
+    padding-inline: 0.25rem;
+    justify-content: center;
+  }
+
   .room-demo-roles button {
     padding-inline: 0.5rem;
   }
@@ -990,6 +996,10 @@
 }
 
 @media (max-width: 359px) {
+  .room-code > svg {
+    display: none;
+  }
+
   .room-queue-track {
     gap: 0.375rem;
   }
