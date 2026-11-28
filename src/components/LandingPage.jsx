@@ -46,18 +46,8 @@ const FAQS = [
   },
 ];
 
-const TRENDING_SONGS = [
-  { img: '/cover-midnight.jpg', title: 'Midnight City', artist: 'M83' },
-  { img: '/cover-instant.jpg', title: 'Instant Crush', artist: 'Daft Punk' },
-  { img: '/cover-resonance.jpg', title: 'Resonance', artist: 'HOME' },
-  { img: '/cover-synth.jpg', title: 'Blinding Lights', artist: 'The Weeknd' },
-  { img: 'https://i.ytimg.com/vi/nxuzYWcY2O0/hqdefault.jpg', title: 'Redbone', artist: 'Childish Gambino' },
-  { img: '/cover-indie.jpg', title: 'The Less I Know The Better', artist: 'Tame Impala' },
-  { img: '/cover-synth.jpg', title: 'Starboy', artist: 'The Weeknd' },
-  { img: '/cover-instant.jpg', title: 'After Dark', artist: 'Mr.Kitty' },
-  { img: '/cover-indie.jpg', title: 'Dreams', artist: 'Fleetwood Mac' },
-  { img: '/cover-soul.jpg', title: 'Sweater Weather', artist: 'The Neighbourhood' },
-];
+const ROOM_TRACKS = ['trk-1', 'trk-2', 'trk-5', 'trk-9', 'trk-7', 'trk-3', 'trk-4', 'trk-6', 'trk-8', 'trk-10']
+  .map((id) => SEARCH_CATALOG.find((track) => track.id === id));
 
 /* m5: turn a bare server/join error into a friendly message with a next step. */
 function friendlyRoomError(err) {
@@ -76,39 +66,6 @@ function friendlyRoomError(err) {
     return `That room is already full (${limit} people max). Ask the host for a new link, or start your own room.`;
   }
   return text;
-}
-
-const TRENDING_GRADIENTS = [
-  'from-violet-600 via-fuchsia-500 to-orange-400',
-  'from-slate-900 via-indigo-800 to-cyan-500',
-  'from-rose-500 via-purple-600 to-indigo-700',
-  'from-red-600 via-rose-600 to-amber-500',
-  'from-amber-400 via-orange-500 to-pink-600',
-  'from-zinc-900 via-violet-900 to-fuchsia-700',
-  'from-sky-500 via-blue-700 to-indigo-950',
-  'from-emerald-500 via-teal-600 to-cyan-700',
-];
-
-/* M6: map a trending card to a real built-in track when one exists, so the
-   demo opens with THAT track — not always Midnight City. */
-function resolveTrendingTrack(song, index = 0) {
-  const found = [...INITIAL_TRACKS, ...SEARCH_CATALOG].find(
-    (t) => t.title.toLowerCase() === song.title.toLowerCase()
-  );
-  if (found) return found;
-  return {
-    id: `trend-${song.title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
-    title: song.title,
-    artist: song.artist,
-    album: 'Single',
-    durationSec: 210,
-    coverImage: song.img,
-    coverGradient: TRENDING_GRADIENTS[index % TRENDING_GRADIENTS.length],
-    accentColor: '#7c3aed',
-    secondaryColor: '#f43f5e',
-    youtubeId: null,
-    spotifyUri: null,
-  };
 }
 
 function SyncPlayground({ onOpenDemo }) {
@@ -192,15 +149,16 @@ function SyncPlayground({ onOpenDemo }) {
   );
 }
 
-function DemoTrackShelf({ onOpenDemo }) {
-  const [songs, setSongs] = useState(TRENDING_SONGS);
+function RoomTrackShelf({ onPlayTrack, roomLoading, roomError }) {
+  const [songs, setSongs] = useState(ROOM_TRACKS);
+  const [selectedTrack, setSelectedTrack] = useState(null);
   const shelfRef = useRef(null);
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all(TRENDING_SONGS.map(async (song) => {
-      const image = await fetchSongArtwork(song.title, song.artist);
-      return image ? { ...song, img: image } : song;
+    Promise.all(ROOM_TRACKS.map(async (track) => {
+      const coverImage = await fetchSongArtwork(track.title, track.artist);
+      return coverImage ? { ...track, coverImage } : track;
     })).then((updated) => {
       if (!cancelled) setSongs(updated);
     });
@@ -208,11 +166,11 @@ function DemoTrackShelf({ onOpenDemo }) {
   }, []);
 
   return (
-    <section className="home-section home-shell" aria-labelledby="home-demo-tracks">
+    <section className="home-section home-shell" aria-labelledby="home-room-tracks">
       <div className="home-section-intro">
         <div>
-          <h2 id="home-demo-tracks">Pick a demo track.</h2>
-          <p>Open a demo room with a song from the sample queue.</p>
+          <h2 id="home-room-tracks">Play a song in a room.</h2>
+          <p>Pick a track to start a listening room you can share with friends.</p>
         </div>
         <div className="home-shelf-controls">
           {[-1, 1].map((direction) => (
@@ -232,16 +190,21 @@ function DemoTrackShelf({ onOpenDemo }) {
         </div>
       </div>
       <div className="home-shelf" ref={shelfRef}>
-        {songs.map((song, index) => (
+        {songs.map((song) => (
           <button
             type="button"
             className="home-shelf-track"
-            key={song.title}
-            onClick={() => onOpenDemo(resolveTrendingTrack(song, index))}
+            key={song.id}
+            aria-label={`Play ${song.title} by ${song.artist} in a room`}
+            disabled={roomLoading}
+            onClick={() => {
+              setSelectedTrack(song);
+              onPlayTrack(song);
+            }}
           >
             <span className="home-shelf-cover">
               <img
-                src={song.img}
+                src={song.coverImage}
                 alt=""
                 width="220"
                 height="220"
@@ -258,6 +221,8 @@ function DemoTrackShelf({ onOpenDemo }) {
           </button>
         ))}
       </div>
+      {selectedTrack && roomLoading && <p className="home-room-status" role="status">Opening a room for {selectedTrack.title}…</p>}
+      {selectedTrack && !roomLoading && roomError && <p className="home-form-error" role="alert">{friendlyRoomError(roomError)}</p>}
     </section>
   );
 }
@@ -484,7 +449,11 @@ export default function LandingPage({
           </div>
         </section>
 
-        <DemoTrackShelf onOpenDemo={onOpenDemo} />
+        <RoomTrackShelf
+          onPlayTrack={(track) => onCreateRoom(connectedSource, track)}
+          roomLoading={roomLoading}
+          roomError={roomError}
+        />
 
         <section id="faq" className="home-section home-shell home-faq">
           <h2>Common questions.</h2>

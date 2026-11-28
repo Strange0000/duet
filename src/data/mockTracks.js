@@ -104,6 +104,30 @@ export const SEARCH_CATALOG = [
     youtubeId: 'mrZRURcb1cM',
     spotifyUri: 'spotify:track:0ofHAoxe9vBkTCp2UQIavz',
   },
+  {
+    id: 'trk-9',
+    title: 'Blinding Lights',
+    artist: 'The Weeknd',
+    album: 'After Hours',
+    durationSec: 204,
+    coverImage: 'https://i.ytimg.com/vi/fHI8X4OXluQ/hqdefault.jpg',
+    coverGradient: 'from-red-600 via-rose-600 to-amber-500',
+    accentColor: '#dc2626',
+    youtubeId: 'fHI8X4OXluQ',
+    spotifyUri: 'spotify:track:0VjIjW4GlUZAMYd2vXMi3b',
+  },
+  {
+    id: 'trk-10',
+    title: 'Sweater Weather',
+    artist: 'The Neighbourhood',
+    album: 'I Love You.',
+    durationSec: 253,
+    coverImage: 'https://i.ytimg.com/vi/GCdwKhTtNNw/hqdefault.jpg',
+    coverGradient: 'from-zinc-900 via-zinc-700 to-slate-500',
+    accentColor: '#64748b',
+    youtubeId: 'GCdwKhTtNNw',
+    spotifyUri: 'spotify:track:2QjOHCTQ1Jl3zawyYOpxh6',
+  },
 ];
 
 export function formatTime(seconds) {

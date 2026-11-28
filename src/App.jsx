@@ -196,7 +196,7 @@ function DuetAppShell() {
   const [homeTheme, setHomeTheme] = useState(getHomeTheme);
   const [resolvingInvite, setResolvingInvite] = useState(() => Boolean(getInviteCode()));
   const [demoActive, setDemoActive] = useState(false);
-  // M6: the track a trending card asked the demo to start with (null = default).
+  // The track selected in the sync playground (null = default).
   const [demoTrack, setDemoTrack] = useState(null);
   // M9: demo state lives here so leaving/re-entering the demo preserves its
   // paused state, track, queue and chat while the page is open.
@@ -300,12 +300,13 @@ function DuetAppShell() {
     }
   }, [roomState?.roomCode]);
 
-  const handleCreateRoom = async (source = 'youtube') => {
+  const handleCreateRoom = async (source = 'youtube', track) => {
     loadRoomView().catch(() => {});
     setRoomLoading(true);
     setRoomNotFound(null);
     try {
-      await createRoom({ name: 'Host', source });
+      await createRoom({ name: 'Host', source, ...(track ? { initialTracks: [track] } : {}) });
+      if (track) await sendCommand('player:play', { positionMs: 0 });
     } catch {
       // Handled by roomError
     } finally {
@@ -331,7 +332,7 @@ function DuetAppShell() {
   };
 
   const handleOpenDemo = (track) => {
-    // M6: a trending card starts a fresh demo with THAT track. Opening the
+    // M6: an explicit track starts a fresh demo with THAT track. Opening the
     // plain demo (no track) preserves the previous demo state (M9).
     setDemoTrack(track || null);
     if (track) setDemoState(null);

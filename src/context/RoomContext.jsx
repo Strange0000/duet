@@ -1417,7 +1417,11 @@ export function RoomProvider({ children }) {
     };
   }, [runClockSync, refreshRoomStateFromServer]);
 
-  const createRoom = useCallback(async ({ name = 'Host', source = 'youtube' } = {}) => {
+  const createRoom = useCallback(async ({
+    name = 'Host',
+    source = 'youtube',
+    initialTracks = INITIAL_TRACKS.slice(0, 3),
+  } = {}) => {
     if (source === 'youtube') preloadYouTubeAPI().catch(() => {});
     setRoomError(null);
     const socket = getSocket();
@@ -1431,7 +1435,7 @@ export function RoomProvider({ children }) {
       {
         name,
         source,
-        initialTracks: INITIAL_TRACKS.slice(0, 3),
+        initialTracks,
       },
       60000
     );
