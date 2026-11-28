@@ -9,6 +9,7 @@ export function getSocket() {
     socketInstance = io(SOCKET_URL, {
       autoConnect: false,
       transports: ['websocket', 'polling'],
+      tryAllTransports: true,
       reconnection: true,
       reconnectionAttempts: 12,
       reconnectionDelay: 800,
@@ -26,15 +27,8 @@ export function emitAck(event, payload = {}, timeoutMs = 60000) {
     socket.connect();
   }
 
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      reject(new Error(`Request timed out (${event})`));
-    }, timeoutMs);
-
-    socket.emit(event, payload, (response) => {
-      clearTimeout(timer);
-      resolve(response);
-    });
+  return socket.timeout(timeoutMs).emitWithAck(event, payload).catch(() => {
+    throw new Error(`Request timed out (${event})`);
   });
 }
 

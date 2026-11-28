@@ -10,8 +10,17 @@ const RoomView = lazy(loadRoomView);
 const LAST_ROOM_KEY = 'duet_last_room';
 const SESSION_STORAGE_KEY = 'duet_active_session';
 
-function getInviteCode() {
-  return /^\/room\/([A-Z2-9]{6})$/i.exec(window.location.pathname)?.[1].toUpperCase() || null;
+function getInviteCode(pathname = window.location.pathname) {
+  return /^\/room\/([A-Z2-9]{6})\/?$/i.exec(pathname)?.[1].toUpperCase() || null;
+}
+
+function getRoomSessionToken(code) {
+  try {
+    const stored = JSON.parse(sessionStorage.getItem(SESSION_STORAGE_KEY) || 'null');
+    return stored?.roomCode === code ? stored.sessionToken : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /* ——— Loading Spinner ——— */
@@ -220,9 +229,9 @@ function DuetAppShell() {
     spotifyCallbackStartedRef.current = true;
     handleSpotifyCallback(window.location.search)
       .then(({ auth, returnPath }) => {
-        const roomMatch = /^\/room\/([A-Z2-9]{6})$/i.exec(returnPath.split('?')[0]);
+        const returnRoomCode = getInviteCode(returnPath.split('?')[0]);
         if (canUseSpotify(auth)) {
-          if (roomMatch) setSpotifyRoomCode(roomMatch[1].toUpperCase());
+          if (returnRoomCode) setSpotifyRoomCode(returnRoomCode);
         } else {
           const message = 'Spotify Premium is required for Audio Only. You can keep listening with YouTube.';
           setSpotifyCallbackError(message);
@@ -263,24 +272,11 @@ function DuetAppShell() {
     joinAttemptedRef.current = code;
     loadRoomView().catch(() => {});
     setRoomLoading(true);
-    // M4 (client part): reuse the stored session for this room so the server
-    // reuses the existing participant instead of returning ROOM_FULL.
-    let sessionToken;
-    try {
-      const stored = JSON.parse(sessionStorage.getItem(SESSION_STORAGE_KEY) || 'null');
-      if (stored?.roomCode === code && stored?.sessionToken) {
-        sessionToken = stored.sessionToken;
-      }
-    } catch {
-      // Ignore malformed stored session
-    }
-    joinRoom({ roomCode: code, name: 'Guest', source: 'youtube', sessionToken })
+    joinRoom({ roomCode: code, name: 'Guest', source: 'youtube', sessionToken: getRoomSessionToken(code) })
       .then(() => setRoomNotFound(null))
       .catch((err) => {
-        if (/not found|expired|ROOM_NOT_FOUND/i.test(err?.message || roomError || '')) {
+        if (/not found|expired|ROOM_NOT_FOUND/i.test(err?.message || '')) {
           setRoomNotFound(code);
-        } else {
-          setRoomError(err?.message || 'Could not join the room.');
         }
       })
       .finally(() => {
@@ -322,7 +318,8 @@ function DuetAppShell() {
     setRoomLoading(true);
     setRoomNotFound(null);
     try {
-      await joinRoom({ roomCode: code, name: 'Guest', source });
+      const roomCode = code.trim().toUpperCase();
+      await joinRoom({ roomCode, name: 'Guest', source, sessionToken: getRoomSessionToken(roomCode) });
     } catch (err) {
       if (/not found|expired|ROOM_NOT_FOUND/i.test(err?.message || '')) {
         setRoomNotFound(code.trim().toUpperCase());

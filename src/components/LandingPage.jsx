@@ -66,6 +66,9 @@ function friendlyRoomError(err) {
   if (/not found|expired|ROOM_NOT_FOUND/i.test(text)) {
     return 'Room not found or expired. Check the code, ask the host for a new link, or start your own room.';
   }
+  if (/Request timed out \(room:(create|join)\)/i.test(text)) {
+    return 'Duet couldn’t reach the room server in time. Check your connection and try again.';
+  }
   if (/full|ROOM_FULL/i.test(text)) {
     // The server error carries the real limit ("maximum 6 participants");
     // use it so this message stays correct if the limit changes again.

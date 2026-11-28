@@ -1301,9 +1301,8 @@ export function RoomProvider({ children }) {
   const createRoom = useCallback(async ({ name = 'Host', source = 'youtube' } = {}) => {
     if (source === 'youtube') preloadYouTubeAPI().catch(() => {});
     setRoomError(null);
-    setConnectionStatus('connecting');
     const socket = getSocket();
-    if (!socket.connected) socket.connect();
+    setConnectionStatus(socket.connected ? 'connected' : 'connecting');
 
     // N-04: 60s ack timeout (Render cold start is ~30–60s; the old 6s
     // timeout orphaned rooms). The room:created listener resolves the
@@ -1350,17 +1349,17 @@ export function RoomProvider({ children }) {
   const joinRoom = useCallback(async ({ roomCode, name = 'Guest', source = 'youtube', sessionToken }) => {
     if (source === 'youtube') preloadYouTubeAPI().catch(() => {});
     setRoomError(null);
-    setConnectionStatus('connecting');
     const socket = getSocket();
-    if (!socket.connected) socket.connect();
+    setConnectionStatus(socket.connected ? 'connected' : 'connecting');
 
     const res = await emitAck('room:join', {
       roomCode: roomCode.trim().toUpperCase(),
       name,
       source,
-      // M4: forward a stored session token so the server can reuse the
-      // existing participant instead of reporting the room as full.
       ...(sessionToken ? { sessionToken } : {}),
+    }).catch((error) => {
+      setRoomError(error.message);
+      throw error;
     });
     if (!res?.ok) {
       setRoomError(res?.error || 'Failed to join room');
