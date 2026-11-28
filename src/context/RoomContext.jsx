@@ -625,6 +625,12 @@ export function RoomProvider({ children }) {
           playerStateRef.current = state;
           setPlayerState(state);
           if (state === 'playing') {
+            // The user may press the native YouTube play control after an
+            // autoplay block. Resume this listener's drift checks as well.
+            if (wantsYouTube && !audioUnlockedRef.current) {
+              audioUnlockedRef.current = true;
+              setAudioUnlocked(true);
+            }
             setPlayerError((error) => error?.code === 'PLAY_STALLED' ? error : null);
           }
           if (state === 'buffering' && audioUnlockedRef.current) {
@@ -1050,8 +1056,10 @@ export function RoomProvider({ children }) {
       // can see it — a player that has not started this track yet must
       // never be seek-corrected.
       let effectivePlayerState = null;
+      let observedPlayerState = null;
       try {
         const polled = await player.getState();
+        observedPlayerState = polled;
         if (polled) {
           let effective = polled;
           if (
@@ -1175,7 +1183,10 @@ export function RoomProvider({ children }) {
         // video never starts. Report the position, but do not seek and do
         // not count a correction. (A player whose position is advancing is
         // 'playing' by the overrule above, so real drift still corrects.)
-        if (!playerHasStarted(effectivePlayerState)) {
+        const safeToSeek = player instanceof YouTubePlayer
+          ? observedPlayerState === 'playing' && positionAdvanced && expectedId && loadedId === expectedId
+          : playerHasStarted(effectivePlayerState);
+        if (!safeToSeek) {
           setSyncMetrics((prev) => ({
             ...prev,
             reportedPositionMs: Math.round(actualMs),
@@ -1421,13 +1432,31 @@ export function RoomProvider({ children }) {
     setPlayerError(null);
   }, []);
 
-  const unlockAudio = useCallback(async () => {
+  const startYouTubeFromGesture = useCallback((positionMs) => {
+    const player = playerRef.current;
+    const playback = roomStateRef.current?.playback;
+    if (!(player instanceof YouTubePlayer) || playback?.playbackState !== 'paused' ||
+        !player.resumeFromGesture(positionMs)) return null;
+
+    return () => {
+      const latest = roomStateRef.current?.playback;
+      if (playerRef.current === player && latest?.trackVersion === playback.trackVersion &&
+          latest.playbackState === 'paused') {
+        player.pause().catch(() => {});
+      }
+    };
+  }, []);
+
+  const unlockAudio = useCallback(async ({ restart = false } = {}) => {
     setAudioUnlocked(true);
     audioUnlockedRef.current = true;
     const player = playerRef.current;
-    const playback = roomStateRef.current?.playback;
+    const state = roomStateRef.current;
+    const playback = state?.playback;
+    const source = state?.participants.find((participant) => participant.id === sessionRef.current?.participantId)?.source ?? 'youtube';
     if (player instanceof YouTubePlayer && playback?.playbackState === 'playing') {
-      player.resumeFromGesture(computeExpectedPositionMs(playback, clockSyncRef.current.estimateServerNowMs()));
+      const position = computeExpectedPositionMs(playback, clockSyncRef.current.estimateServerNowMs());
+      if (player.resumeFromGesture(position, { restart }) && restart) setPlayerError(null);
     }
     if (player instanceof LocalAudioPlayer) {
       const [unlocked] = await Promise.all([player.unlockAudio(), backgroundAudio.unlock()]);
@@ -1436,7 +1465,7 @@ export function RoomProvider({ children }) {
         setAudioUnlocked(false);
         return;
       }
-    } else {
+    } else if (source !== 'youtube') {
       await Promise.all([
         player instanceof SpotifyPlayer ? player.unlockAudio() : undefined,
         backgroundAudio.unlock(),
@@ -1611,9 +1640,12 @@ export function RoomProvider({ children }) {
     backgroundAudio.clearPosition();
     backgroundAudio.updateMetadata(currentTrack);
     if (roomState?.roomCode) {
-      backgroundAudio.setPlaying(Boolean(currentTrack) && roomState?.playback?.playbackState === 'playing' && audioUnlocked);
+      backgroundAudio.setPlaying(
+        Boolean(currentTrack) && roomState?.playback?.playbackState === 'playing' && audioUnlocked,
+        (myParticipant?.source ?? 'youtube') !== 'youtube'
+      );
     }
-  }, [audioUnlocked, currentTrack?.id, roomState?.roomCode, roomState?.playback?.playbackState, roomState?.playback?.trackVersion]);
+  }, [audioUnlocked, currentTrack?.id, myParticipant?.source, roomState?.roomCode, roomState?.playback?.playbackState, roomState?.playback?.trackVersion]);
 
   useEffect(() => {
     if (!currentTrack || !(roomState?.playback?.durationMs > 0 || currentTrack.durationSec > 0)) return;
@@ -1667,6 +1699,7 @@ export function RoomProvider({ children }) {
     joinRoom,
     leaveRoom,
     unlockAudio,
+    startYouTubeFromGesture,
     runClockSync,
     getPlaybackLeadMs,
     sendCommand,

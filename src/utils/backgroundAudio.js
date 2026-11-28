@@ -39,11 +39,13 @@ class BackgroundAudioManager {
     }
   }
 
-  async setPlaying(playing) {
+  async setPlaying(playing, keepAlive = true) {
     this.isPlaying = Boolean(playing);
-    const el = this._ensureAudioEl();
+    // The YouTube iframe owns the audio session. A second audio element can
+    // take focus away from it on phones.
+    const el = keepAlive ? this._ensureAudioEl() : this.audioEl;
     if (el) {
-      if (this.isPlaying) {
+      if (this.isPlaying && keepAlive) {
         try {
           await el.play();
           this.unlocked = true;

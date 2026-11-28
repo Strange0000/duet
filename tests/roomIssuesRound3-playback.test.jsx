@@ -321,6 +321,23 @@ describe('YouTubePlayer (R1 first Play, R5 stale duration)', () => {
     container.remove();
   });
 
+  it('lets a mobile playback tap start the iframe before the scheduled room command arrives', async () => {
+    const player = new YouTubePlayer();
+    const container = makeContainer();
+    await initPlayer(player, container);
+    await player.loadTrack(MIDNIGHT_CITY, 0, false);
+
+    expect(player.resumeFromGesture(2500)).toBe(true);
+    expect(fakePlayer.loadVideoById).toHaveBeenCalledWith({ videoId: MIDNIGHT_CITY.youtubeId, startSeconds: 2.5 });
+    await player.play(2600);
+    expect(fakePlayer.loadVideoById).toHaveBeenCalledTimes(1);
+    expect(fakePlayer.playVideo).not.toHaveBeenCalled();
+    expect(fakePlayer.seekTo).not.toHaveBeenCalled();
+
+    await player.destroy();
+    container.remove();
+  });
+
   it('starts a cued video directly at the room position without seeking first', async () => {
     const player = new YouTubePlayer();
     const container = makeContainer();

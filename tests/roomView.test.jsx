@@ -126,6 +126,37 @@ describe('RoomView renders a real room', () => {
     container.remove();
   });
 
+  it('starts YouTube in the mobile Play tap and rolls back if the room rejects it', async () => {
+    const cancelLocalStart = vi.fn();
+    const startYouTubeFromGesture = vi.fn(() => cancelLocalStart);
+    const sendCommand = vi.fn().mockResolvedValue({ ok: false });
+    const ctx = makeCtx({ startYouTubeFromGesture, sendCommand });
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    document.body.appendChild(container);
+    const originalMatchMedia = window.matchMedia;
+    window.matchMedia = vi.fn(() => ({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
+
+    try {
+      act(() => root.render(
+        <RoomContext.Provider value={ctx}>
+          <RoomView onLeave={() => {}} />
+        </RoomContext.Provider>
+      ));
+      await act(async () => {
+        container.querySelector('.room-play').click();
+        expect(startYouTubeFromGesture).toHaveBeenCalledWith(0);
+        expect(startYouTubeFromGesture.mock.invocationCallOrder[0]).toBeLessThan(sendCommand.mock.invocationCallOrder[0]);
+      });
+      expect(cancelLocalStart).toHaveBeenCalledOnce();
+      expect(ctx.getCurrentPositionMs).not.toHaveBeenCalled();
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+      window.matchMedia = originalMatchMedia;
+    }
+  });
+
   it('lists the first received chat message and opens chat from the notification', () => {
     const ctx = makeCtx();
     const container = document.createElement('div');

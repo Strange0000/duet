@@ -445,16 +445,17 @@ export class YouTubePlayer extends BasePlayer {
     }
   }
 
-  resumeFromGesture(positionMs) {
-    if (!this.isReady || !this.player || !this.currentVideoId || this.playerFailed) return;
-    if (this.hasPlayedVideoId !== this.currentVideoId && this.loadIssuedForVideoId !== this.currentVideoId) {
+  resumeFromGesture(positionMs, { restart = false } = {}) {
+    if (!this.isReady || !this.player || !this.currentVideoId || this.playerFailed) return false;
+    if (restart || (this.hasPlayedVideoId !== this.currentVideoId && this.loadIssuedForVideoId !== this.currentVideoId)) {
       this.restartPlayback(positionMs);
     } else {
-      if (this.loadIssuedForVideoId !== this.currentVideoId) {
+      if (this.state !== 'buffering' && this.loadIssuedForVideoId !== this.currentVideoId) {
         this.player.seekTo(Math.max(0, positionMs / 1000), true);
       }
       this.player.playVideo();
     }
+    return true;
   }
 
   restartPlayback(positionMs) {
@@ -523,7 +524,9 @@ export class YouTubePlayer extends BasePlayer {
     await this.recoverIfFailed(this.currentVideoId);
     if (this.currentVideoId && this.hasPlayedVideoId !== this.currentVideoId) {
       if (this.loadIssuedForVideoId === this.currentVideoId) {
-        this.player.playVideo();
+        // The scheduled room command can arrive while a trusted tap is
+        // already starting this video. Leave that request alone.
+        if (!Number.isFinite(positionMs)) this.player.playVideo();
         return;
       }
       if (

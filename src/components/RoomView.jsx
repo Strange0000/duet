@@ -120,6 +120,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
     partnerTyping,
     initPlayerForSource,
     unlockAudio,
+    startYouTubeFromGesture,
     runClockSync,
     getPlaybackLeadMs,
     sendCommand,
@@ -603,7 +604,11 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
     setPlayLoading(true);
     try {
       let posMs = syncMetrics.expectedPositionMs ?? currentSec * 1000;
-      if (typeof getCurrentPositionMs === 'function' && ctxPlayerState !== 'buffering' && ctxPlayerState !== 'error') {
+      // Keep the immediate YouTube call inside the mobile Play tap.
+      const cancelLocalStart = isMobileLayout && hasVideo && !isPlaying && !serverPlaying && connectionStatus === 'connected'
+        ? startYouTubeFromGesture?.(posMs)
+        : null;
+      if (!cancelLocalStart && typeof getCurrentPositionMs === 'function' && ctxPlayerState !== 'buffering' && ctxPlayerState !== 'error') {
         try {
           const live = await getCurrentPositionMs();
           if (typeof live === 'number') posMs = live;
@@ -623,7 +628,10 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
         ]);
       } else {
         await Promise.race([
-          sendCommand('player:play', { positionMs: Math.round(posMs), scheduleLeadMs: getPlaybackLeadMs?.() ?? 0 }),
+          sendCommand('player:play', { positionMs: Math.round(posMs), scheduleLeadMs: getPlaybackLeadMs?.() ?? 0 })
+            .then((result) => {
+              if (!result?.ok || result.skipped === 'stale_version') cancelLocalStart?.();
+            }, () => cancelLocalStart?.()),
           new Promise((resolve) => setTimeout(resolve, 3000)),
         ]);
       }
@@ -635,8 +643,8 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
   // R4: the loading state must clear as soon as playback actually starts —
   // not when the (possibly 60s) command ack eventually returns.
   useEffect(() => {
-    if (isPlaying) setPlayLoading(false);
-  }, [isPlaying]);
+    if (isPlaying && (isDemo || serverPlaying)) setPlayLoading(false);
+  }, [isPlaying, isDemo, serverPlaying]);
 
   // m2: Resync with a brief confirmation.
   const handleResync = async () => {
@@ -1504,6 +1512,15 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
           <div role="alert" className="room-error mb-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-xs text-rose-200">
             <span>{playerError?.message || roomError}</span>
             <div className="flex items-center gap-2">
+              {playerError?.code === 'PLAY_STALLED' && hasVideo && serverPlaying && (
+                <button
+                  type="button"
+                  onClick={() => unlockAudio({ restart: true })}
+                  className="min-h-11 rounded-full bg-white/15 px-3 font-semibold text-white hover:bg-white/25 cursor-pointer"
+                >
+                  Resume video here
+                </button>
+              )}
               {playerError && ctxReloadPlayer && (
                 <button
                   onClick={async () => {
@@ -1582,12 +1599,14 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
               <div>
                 <p className="text-sm font-bold text-white">Tap to unlock synced audio</p>
                 <p className="text-xs text-zinc-300">
-                  Mobile browsers require a tap gesture before syncing playback with your partner.
+                  {hasVideo && serverPlaying
+                    ? 'If it stays paused, tap Play on the video.'
+                    : 'Your browser needs a tap before it can play synced audio.'}
                 </p>
               </div>
             </div>
             <button
-              onClick={isDemo ? () => setDemoUnlocked(true) : unlockAudio}
+              onClick={isDemo ? () => setDemoUnlocked(true) : () => unlockAudio()}
               className="w-full rounded-full bg-violet-600 px-5 py-2.5 text-xs font-semibold text-white shadow transition hover:bg-violet-700 sm:w-auto cursor-pointer"
             >
               Tap to Join Audio
@@ -1738,7 +1757,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                 <div className="room-stage relative mt-6 space-y-5">
                   {hasVideo && (
                     <div className="room-video overflow-hidden rounded-2xl border border-white/10 bg-black">
-                      <div ref={ytContainerRef} className="aspect-video min-h-[200px] w-full" />
+                      <div ref={ytContainerRef} className="room-video-frame relative aspect-video min-h-[200px] w-full" />
                     </div>
                   )}
 
