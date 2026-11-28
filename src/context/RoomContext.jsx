@@ -471,7 +471,8 @@ export function RoomProvider({ children }) {
             } catch {
               // Second check below will surface the error
             }
-            playWatchdogTimerRef.current = setTimeout(check, 4000);
+            // E-20: second attempt gets more time (8s) on slow mobile networks
+            playWatchdogTimerRef.current = setTimeout(check, 8000);
             return;
           }
           setPlayerError({
@@ -480,7 +481,8 @@ export function RoomProvider({ children }) {
               'Playback didn’t start — the video may still be loading or blocked. Try tapping Play again, or press Next.',
           });
         };
-        playWatchdogTimerRef.current = setTimeout(check, 4000);
+        // E-20: initial timeout increased from 4s to 6s for slow networks
+        playWatchdogTimerRef.current = setTimeout(check, 6000);
       };
 
       const estimatedNow = clockSyncRef.current.estimateServerNowMs();

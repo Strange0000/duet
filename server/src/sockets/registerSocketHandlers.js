@@ -58,6 +58,22 @@ export function registerSocketHandlers(io, store, env) {
     };
   };
   const participantLimiters = new Map(); // participantId -> Map<kind, limiter>
+  // E-18: IP-level rate limiters for pre-membership events (room:create,
+  // room:join) so a reconnect does not reset the limiter.
+  const ipLimiterMap = new Map(); // IP -> { join, create }
+  // I-05: transient socket disconnects (refresh, network switch) reconnect
+  // within 1-2s. We delay emitting connection:status { connected: false } by 2s;
+  // if room:reconnect or room:join lands within this window, the timer is
+  // cancelled and the partner's presence indicator never flashes disconnected.
+  const disconnectPresenceTimers = new Map(); // `${roomCode}:${participantId}` -> timer
+  const clearDisconnectTimer = (roomCode, participantId) => {
+    const key = `${roomCode}:${participantId}`;
+    const timer = disconnectPresenceTimers.get(key);
+    if (timer) {
+      clearTimeout(timer);
+      disconnectPresenceTimers.delete(key);
+    }
+  };
   const checkParticipantLimit = (participantId, kind, limit) => {
     let byKind = participantLimiters.get(participantId);
     if (!byKind) {
@@ -79,11 +95,27 @@ export function registerSocketHandlers(io, store, env) {
     socket.data.roomCode = null;
     socket.data.participantId = null;
 
-    // Pre-membership limiters (per connection): no participantId exists yet
-    // when a socket creates or joins a room, so these cannot be keyed by
-    // participantId. Limits: join 15/min, create 10/min.
-    const checkJoinRateLimit = createSlidingWindowLimiter(15);
-    const checkCreateRateLimit = createSlidingWindowLimiter(10);
+    // Pre-membership limiters: no participantId exists yet when a socket
+    // creates or joins a room. E-18: key by IP address instead of per-
+    // connection so a reconnect does not reset the limiter. Falls back to
+    // the socket id when the IP is unavailable (direct connection / tests).
+    const clientIp =
+      socket.handshake?.headers?.['x-forwarded-for']?.split(',')[0]?.trim() ||
+      socket.handshake?.address ||
+      socket.id;
+    let ipLimiters = ipLimiterMap.get(clientIp);
+    if (!ipLimiters) {
+      if (ipLimiterMap.size > 10000) {
+        ipLimiterMap.delete(ipLimiterMap.keys().next().value);
+      }
+      ipLimiters = {
+        join: createSlidingWindowLimiter(15),
+        create: createSlidingWindowLimiter(10),
+      };
+      ipLimiterMap.set(clientIp, ipLimiters);
+    }
+    const checkJoinRateLimit = ipLimiters.join;
+    const checkCreateRateLimit = ipLimiters.create;
     const rateLimited = (ack, what) =>
       reply(ack, { ok: false, code: 'RATE_LIMITED', error: `Too many ${what}. Please wait a minute.` });
 
@@ -217,6 +249,7 @@ export function registerSocketHandlers(io, store, env) {
       }
 
       store.attachSocket(joined.room.code, joined.participantId, socket.id);
+      clearDisconnectTimer(joined.room.code, joined.participantId);
       socket.data.roomCode = joined.room.code;
       socket.data.participantId = joined.participantId;
       socket.join(joined.room.code);
@@ -315,6 +348,7 @@ export function registerSocketHandlers(io, store, env) {
       }
 
       store.attachSocket(rec.room.code, rec.participantId, socket.id);
+      clearDisconnectTimer(rec.room.code, rec.participantId);
       socket.data.roomCode = rec.room.code;
       socket.data.participantId = rec.participantId;
       socket.join(rec.room.code);
@@ -337,6 +371,7 @@ export function registerSocketHandlers(io, store, env) {
       const { roomCode, participantId } = socket.data;
       if (!roomCode || !participantId) return reply(ack, { ok: true });
 
+      clearDisconnectTimer(roomCode, participantId);
       const res = store.leaveRoom(roomCode, participantId);
       socket.leave(roomCode);
       socket.data.roomCode = null;
@@ -773,11 +808,23 @@ export function registerSocketHandlers(io, store, env) {
       );
 
       if (room) {
-        io.to(roomCode).emit('connection:status', {
-          participantId,
-          connected: false,
-        });
-        emitRoomState(room);
+        // I-05: transient socket disconnects (refresh, network switch) reconnect
+        // within 1-2s. We delay emitting connection:status { connected: false } by 2s;
+        // if room:reconnect or room:join lands within this window, the timer is
+        // cancelled and the partner's presence indicator never flashes disconnected.
+        const disconnectKey = `${roomCode}:${participantId}`;
+        clearDisconnectTimer(roomCode, participantId);
+        const timer = setTimeout(() => {
+          disconnectPresenceTimers.delete(disconnectKey);
+          io.to(roomCode).emit('connection:status', {
+            participantId,
+            connected: false,
+          });
+          const curRoom = store.getRoom(roomCode);
+          if (curRoom) emitRoomState(curRoom);
+        }, 2000);
+        timer.unref?.();
+        disconnectPresenceTimers.set(disconnectKey, timer);
       }
     });
   });

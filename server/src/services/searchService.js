@@ -5,8 +5,10 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
 const MAX_SEARCH_CACHE_ENTRIES = 200;
 
 // YouTube Data API v3 quota guard (N-31): in-memory count of YouTube Data API
-// calls per calendar day. The default free quota is 10,000 units/day; we stop
+// units per calendar day. The default free quota is 10,000 units/day; we stop
 // at 9,000 to leave headroom. Resets at midnight (local server date).
+// E-19: counts actual API quota units (search.list = 100 units,
+// videos.list = 1 unit per call) instead of treating every call as 1.
 const YOUTUBE_QUOTA_DAILY_LIMIT = 9000;
 let youtubeQuotaDay = null;
 let youtubeQuotaCount = 0;
@@ -141,6 +143,7 @@ export async function lookupYouTubeVideo(videoId) {
 
   try {
     if (env.YOUTUBE_API_KEY) {
+      // E-19: videos.list costs 1 unit per call.
       if (!consumeYouTubeQuota(1)) {
         return { error: 'YouTube search quota exhausted for today' };
       }
@@ -216,7 +219,8 @@ export async function searchYouTubeVideos(query, maxResults = 6) {
     return { items: [], configured: false };
   }
   // N-31: stop before burning the daily YouTube Data API quota.
-  if (!consumeYouTubeQuota(1)) {
+  // E-19: search.list costs 100 quota units.
+  if (!consumeYouTubeQuota(100)) {
     return { items: [], configured: true, error: 'YouTube search quota exhausted for today' };
   }
 
@@ -244,6 +248,7 @@ export async function searchYouTubeVideos(query, maxResults = 6) {
 
     if (videoIds.length === 0) return { items: [], configured: true };
 
+    // E-19: videos.list costs 1 unit per call (regardless of how many IDs).
     if (!consumeYouTubeQuota(1)) {
       return { items: [], configured: true, error: 'YouTube search quota exhausted for today' };
     }
