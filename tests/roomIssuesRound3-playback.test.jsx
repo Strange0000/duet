@@ -20,7 +20,7 @@ import {
   resolvePlaybackStatus,
   shouldReapplyPlayback,
 } from '../src/utils/playbackSync.js';
-import { YouTubePlayer } from '../src/players/YouTubePlayer.js';
+import { preloadYouTubeAPI, YouTubePlayer } from '../src/players/YouTubePlayer.js';
 import { RoomContext } from '../src/context/RoomContext.jsx';
 import RoomView from '../src/components/RoomView.jsx';
 import { INITIAL_TRACKS } from '../src/data/mockTracks.js';
@@ -223,6 +223,22 @@ describe('shouldReapplyPlayback after an error (F1)', () => {
   });
 });
 
+it('removes a failed YouTube script so preload and Reload player can share a fresh request', async () => {
+  const first = preloadYouTubeAPI();
+  expect(preloadYouTubeAPI()).toBe(first);
+  const script = document.querySelector('script[src="https://www.youtube.com/iframe_api"]');
+  script.dispatchEvent(new Event('error'));
+  await expect(first).rejects.toThrow('Could not reach YouTube');
+  expect(script.isConnected).toBe(false);
+
+  const second = preloadYouTubeAPI();
+  expect(second).not.toBe(first);
+  const replacement = document.querySelector('script[src="https://www.youtube.com/iframe_api"]');
+  expect(replacement).not.toBe(script);
+  replacement.dispatchEvent(new Event('error'));
+  await expect(second).rejects.toThrow('Reload player');
+});
+
 // ---------------------------------------------------------------- R1/R5: YouTubePlayer
 describe('YouTubePlayer (R1 first Play, R5 stale duration)', () => {
   let capturedEvents;
@@ -274,6 +290,36 @@ describe('YouTubePlayer (R1 first Play, R5 stale duration)', () => {
     document.body.appendChild(el);
     return el;
   }
+
+  it('restarts a stalled video at the latest room position', async () => {
+    const player = new YouTubePlayer();
+    const container = makeContainer();
+    await initPlayer(player, container);
+    await player.loadTrack({ youtubeId: 'dX3k_QDnzHE' }, 1000, true);
+    capturedEvents.onStateChange({ data: window.YT.PlayerState.BUFFERING });
+
+    player.restartPlayback(6875);
+
+    expect(fakePlayer.loadVideoById).toHaveBeenLastCalledWith({ videoId: 'dX3k_QDnzHE', startSeconds: 6.875 });
+    await player.destroy();
+    container.remove();
+  });
+
+  it('clears a blocked autoplay request so a fresh gesture can start the video', async () => {
+    const onAutoplayBlocked = vi.fn();
+    const player = new YouTubePlayer({ onAutoplayBlocked });
+    const container = makeContainer();
+    await initPlayer(player, container);
+    await player.loadTrack({ youtubeId: 'dX3k_QDnzHE' }, 1000, true);
+    capturedEvents.onAutoplayBlocked();
+
+    player.resumeFromGesture(3000);
+
+    expect(onAutoplayBlocked).toHaveBeenCalledOnce();
+    expect(fakePlayer.loadVideoById).toHaveBeenLastCalledWith({ videoId: 'dX3k_QDnzHE', startSeconds: 3 });
+    await player.destroy();
+    container.remove();
+  });
 
   it('R1: play() on a merely-cued video force-loads it instead of calling playVideo()', async () => {
     const player = new YouTubePlayer({ onStateChange: vi.fn() });

@@ -109,14 +109,14 @@ export default function RoomLobby({
       {invite && (
         <section aria-labelledby="room-lobby-invite">
           <div className="room-lobby-heading">
-            <h3 id="room-lobby-invite">Invite a partner</h3>
+            <h3 id="room-lobby-invite">Invite listeners</h3>
           </div>
           <div className="room-lobby-share">
             <button type="button" onClick={invite.onCopyCode}>
               <Copy size={16} aria-hidden="true" /> {invite.copiedCode ? 'Code copied' : invite.code}
             </button>
-            <button type="button" onClick={invite.onShareLink || invite.onCopyLink}>
-              <Share2 size={16} aria-hidden="true" /> {invite.copiedLink ? 'Link copied' : 'Share invite'}
+            <button type="button" onClick={invite.onShareLink}>
+              <Share2 size={16} aria-hidden="true" /> Share invite
             </button>
           </div>
         </section>

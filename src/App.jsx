@@ -4,7 +4,8 @@ import { getHomeTheme } from './utils/appearance';
 import { canUseSpotify, handleSpotifyCallback } from './utils/spotifyAuth';
 
 const LandingPage = lazy(() => import('./components/LandingPage'));
-const RoomView = lazy(() => import('./components/RoomView'));
+const loadRoomView = () => import('./components/RoomView');
+const RoomView = lazy(loadRoomView);
 
 const LAST_ROOM_KEY = 'duet_last_room';
 const SESSION_STORAGE_KEY = 'duet_active_session';
@@ -260,6 +261,7 @@ function DuetAppShell() {
     if (!code) return;
     if (joinAttemptedRef.current === code) return;
     joinAttemptedRef.current = code;
+    loadRoomView().catch(() => {});
     setRoomLoading(true);
     // M4 (client part): reuse the stored session for this room so the server
     // reuses the existing participant instead of returning ROOM_FULL.
@@ -303,6 +305,7 @@ function DuetAppShell() {
   }, [roomState?.roomCode]);
 
   const handleCreateRoom = async (source = 'youtube') => {
+    loadRoomView().catch(() => {});
     setRoomLoading(true);
     setRoomNotFound(null);
     try {
@@ -315,6 +318,7 @@ function DuetAppShell() {
   };
 
   const handleJoinRoom = async (code, source = 'youtube') => {
+    loadRoomView().catch(() => {});
     setRoomLoading(true);
     setRoomNotFound(null);
     try {

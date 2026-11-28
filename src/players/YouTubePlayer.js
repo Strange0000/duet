@@ -4,60 +4,53 @@ let ytApiPromise = null;
 
 const YT_LOAD_TIMEOUT_MS = 15000;
 
-function loadYouTubeIframeAPI() {
+export function preloadYouTubeAPI() {
   if (typeof window === 'undefined') {
     return Promise.reject(new Error('YouTube API requires a browser environment'));
   }
-  if (window.YT && window.YT.Player) {
-    return Promise.resolve(window.YT);
-  }
+  if (window.YT?.Player) return Promise.resolve(window.YT);
   if (ytApiPromise) return ytApiPromise;
 
   ytApiPromise = new Promise((resolve, reject) => {
-    let settled = false;
-    const existingScript = document.querySelector('script[src="https://www.youtube.com/iframe_api"]');
-    const prevReady = window.onYouTubeIframeAPIReady;
-
+    const src = 'https://www.youtube.com/iframe_api';
+    const existingScript = document.querySelector(`script[src="${src}"]`);
+    const script = existingScript || document.createElement('script');
+    const previousReady = window.onYouTubeIframeAPIReady;
     const cleanup = () => {
       clearTimeout(timer);
       clearInterval(poll);
+      script.removeEventListener('error', fail);
+      if (window.onYouTubeIframeAPIReady === ready) {
+        window.onYouTubeIframeAPIReady = previousReady;
+      }
     };
-    const fail = (err) => {
-      if (settled) return;
-      settled = true;
+    const fail = () => {
       cleanup();
+      script.remove();
       ytApiPromise = null;
-      reject(err);
+      reject(new Error('Could not reach YouTube. Check your connection or video blockers, then try Reload player.'));
     };
     const succeed = () => {
-      if (settled) return;
-      if (!window.YT || !window.YT.Player) return;
-      settled = true;
+      if (!window.YT?.Player) return;
       cleanup();
       resolve(window.YT);
     };
-
-    // 15s timeout: the script tag may already exist (or be blocked by an
-    // ad-blocker) yet the API never loads — never hang forever (N-07).
-    const timer = setTimeout(
-      () => fail(new Error('YouTube player failed to load — check your connection or ad-blocker')),
-      YT_LOAD_TIMEOUT_MS
-    );
-    // Poll as well as waiting on the callback: if the script tag already
-    // exists but the ready callback never fires, the poll still notices.
-    const poll = setInterval(succeed, 250);
-
-    window.onYouTubeIframeAPIReady = () => {
-      if (typeof prevReady === 'function') prevReady();
-      succeed();
+    const ready = () => {
+      try {
+        previousReady?.();
+      } finally {
+        succeed();
+      }
     };
+    const timer = setTimeout(fail, YT_LOAD_TIMEOUT_MS);
+    const poll = setInterval(succeed, 250);
+    script.addEventListener('error', fail, { once: true });
+    window.onYouTubeIframeAPIReady = ready;
 
     if (!existingScript) {
-      const tag = document.createElement('script');
-      tag.src = 'https://www.youtube.com/iframe_api';
-      tag.async = true;
-      tag.onerror = () => fail(new Error('Failed to load YouTube IFrame API'));
-      document.head.appendChild(tag);
+      script.src = src;
+      script.async = true;
+      document.head.appendChild(script);
     }
   });
 
@@ -143,7 +136,7 @@ export class YouTubePlayer extends BasePlayer {
   async initialize(containerEl) {
     if (!containerEl) throw new Error('Visible YouTube container element is required');
     this.containerEl = containerEl;
-    const YT = await loadYouTubeIframeAPI();
+    const YT = await preloadYouTubeAPI();
 
     // Ensure mount node inside container
     containerEl.innerHTML = '';
@@ -245,6 +238,12 @@ export class YouTubePlayer extends BasePlayer {
               this.callbacks.onStateChange?.('ended');
               this.callbacks.onEnded?.();
             }
+          },
+          onAutoplayBlocked: () => {
+            this.loadIssuedForVideoId = null;
+            this.state = 'cued';
+            this.callbacks.onStateChange?.('cued');
+            this.callbacks.onAutoplayBlocked?.();
           },
           onError: (event) => {
             const code = event.data;
@@ -439,8 +438,7 @@ export class YouTubePlayer extends BasePlayer {
     // lost while the video is still loading and the OLD video keeps playing.
     // loadVideoById loads AND plays, so use it when the room is playing.
     if (shouldPlay) {
-      this.loadIssuedForVideoId = videoId;
-      this.player.loadVideoById({ videoId, startSeconds: startSec });
+      this.restartPlayback(startPositionMs);
     } else {
       this.player.cueVideoById({ videoId, startSeconds: startSec });
     }
@@ -448,14 +446,25 @@ export class YouTubePlayer extends BasePlayer {
 
   resumeFromGesture(positionMs) {
     if (!this.isReady || !this.player || !this.currentVideoId || this.playerFailed) return;
-    const startSeconds = Math.max(0, positionMs / 1000);
     if (this.hasPlayedVideoId !== this.currentVideoId && this.loadIssuedForVideoId !== this.currentVideoId) {
-      this.loadIssuedForVideoId = this.currentVideoId;
-      this.player.loadVideoById({ videoId: this.currentVideoId, startSeconds });
+      this.restartPlayback(positionMs);
     } else {
-      this.player.seekTo(startSeconds, true);
+      if (this.loadIssuedForVideoId !== this.currentVideoId) {
+        this.player.seekTo(Math.max(0, positionMs / 1000), true);
+      }
       this.player.playVideo();
     }
+  }
+
+  restartPlayback(positionMs) {
+    if (!this.isReady || !this.player || !this.currentVideoId || this.failedIsEmbedBlocked) return;
+    this.targetStartPositionMs = positionMs;
+    this.loadIssuedForVideoId = this.currentVideoId;
+    this.state = 'buffering';
+    this.player.loadVideoById({
+      videoId: this.currentVideoId,
+      startSeconds: Math.max(0, positionMs / 1000),
+    });
   }
 
   async play() {
@@ -531,8 +540,7 @@ export class YouTubePlayer extends BasePlayer {
         // Fall through with startSec 0; the drift loop seeks to the
         // expected position once playback starts.
       }
-      this.loadIssuedForVideoId = this.currentVideoId;
-      this.player.loadVideoById({ videoId: this.currentVideoId, startSeconds: startSec });
+      this.restartPlayback(startSec * 1000);
       return;
     }
     this.player.playVideo();

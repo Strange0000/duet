@@ -70,6 +70,33 @@ const REACTION_EMOJIS = ['❤️', '🔥', '🎵', '😊', '✨', '😭'];
 // so the add is retried once and the raw lookup error is never shown.
 const MEMBERSHIP_ERROR_CODES = ['NOT_IN_ROOM', 'PARTICIPANT_NOT_FOUND', 'UNAUTHORIZED'];
 
+function InviteDialog({ invite, onClose }) {
+  const dialogRef = useRef(null);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (typeof dialog.showModal === 'function') dialog.showModal();
+    else dialog.setAttribute('open', '');
+  }, []);
+
+  const message = encodeURIComponent(`${invite.text}\n${invite.url}`);
+
+  return (
+    <dialog ref={dialogRef} className="room-share-dialog" aria-labelledby="room-share-title" onClose={onClose}>
+      <div className="room-share-heading">
+        <h2 id="room-share-title">Share invite</h2>
+        <button type="button" onClick={onClose} aria-label="Close share invite"><X size={19} /></button>
+      </div>
+      <div className="room-share-targets">
+        <a href={`https://wa.me/?text=${message}`} target="_blank" rel="noreferrer">WhatsApp</a>
+        <a href={`mailto:?subject=${encodeURIComponent('Join my Duet room')}&body=${message}`}>Email</a>
+      </div>
+      <label htmlFor="room-share-url">Invite link</label>
+      <input id="room-share-url" type="url" readOnly value={invite.url} onFocus={(event) => event.currentTarget.select()} />
+    </dialog>
+  );
+}
+
 export default function RoomView({ isDemo = false, onLeave, demoTrack = null, demoState = null, onDemoStateChange, appearance = getHomeTheme() }) {
   const {
     roomState,
@@ -93,6 +120,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
     initPlayerForSource,
     unlockAudio,
     runClockSync,
+    getPlaybackLeadMs,
     sendCommand,
     leaveRoom,
     setPlayerError,
@@ -175,7 +203,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
 
   // ——— Shared UI State ———
   const [copied, setCopied] = useState(false);
-  const [copiedLink, setCopiedLink] = useState(false);
+  const [shareInvite, setShareInvite] = useState(null);
   // Round 4: disables the "Reload player" button while a reload is running.
   const [reloadingPlayer, setReloadingPlayer] = useState(false);
   const [activeTab, setActiveTab] = useState('queue');
@@ -510,41 +538,22 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
     setTimeout(() => setCopied(false), 1800);
   };
 
-  const handleCopyInviteLink = () => {
-    const link = `${window.location.origin}/room/${roomCode}`;
-    navigator.clipboard?.writeText(link).catch(() => {});
-    setCopiedLink(true);
-    setTimeout(() => setCopiedLink(false), 1800);
-  };
-
-  // Native share sheet (phone: WhatsApp, Telegram, …). Falls back to
-  // copying the invite link when Web Share is unavailable or fails.
-  // A dismissed share sheet (AbortError) is silent — no copy, no toast.
   const handleShareInvite = async () => {
-    const link = `${window.location.origin}/room/${roomCode}`;
-    const trackLabel = currentTrack?.title
-      ? `"${currentTrack.title}"${currentTrack.artist ? ` by ${currentTrack.artist}` : ''}`
-      : null;
-    const text = trackLabel
-      ? `Join my Duet room (code ${roomCode}) — we're listening to ${trackLabel}, at the same second.`
-      : `Join my Duet room (code ${roomCode}) — we're listening to the same song, at the same second.`;
-    const copyFallback = () => {
-      navigator.clipboard?.writeText(link).catch(() => {});
-      setCopiedLink(true);
-      showToast('Invite link copied');
-      setTimeout(() => setCopiedLink(false), 1800);
-    };
+    const url = `${window.location.origin}/room/${roomCode}`;
+    const track = currentTrack?.title
+      ? ` We’re listening to “${currentTrack.title}”${currentTrack.artist ? ` by ${currentTrack.artist}` : ''}.`
+      : '';
+    const text = `Join my Duet room (code ${roomCode}).${track}`;
+
     if (typeof navigator.share === 'function') {
       try {
-        await navigator.share({ title: 'Duet — listen together', text, url: link });
+        await navigator.share({ title: 'Duet — listen together', text, url });
         return;
-      } catch (err) {
-        if (err?.name === 'AbortError') return;
-        copyFallback();
-        return;
+      } catch (error) {
+        if (error?.name === 'AbortError') return;
       }
     }
-    copyFallback();
+    setShareInvite({ text, url });
   };
 
   const handleLeaveClick = async () => {
@@ -581,7 +590,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
     setPlayLoading(true);
     try {
       let posMs = syncMetrics.expectedPositionMs ?? currentSec * 1000;
-      if (typeof getCurrentPositionMs === 'function') {
+      if (typeof getCurrentPositionMs === 'function' && ctxPlayerState !== 'buffering' && ctxPlayerState !== 'error') {
         try {
           const live = await getCurrentPositionMs();
           if (typeof live === 'number') posMs = live;
@@ -601,7 +610,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
         ]);
       } else {
         await Promise.race([
-          sendCommand('player:play', { positionMs: Math.round(posMs), scheduleLeadMs: 250 }),
+          sendCommand('player:play', { positionMs: Math.round(posMs), scheduleLeadMs: getPlaybackLeadMs?.() ?? 0 }),
           new Promise((resolve) => setTimeout(resolve, 3000)),
         ]);
       }
@@ -976,6 +985,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
     >
       {/* Theme Living Ambient Stage */}
       <ThemeBackground theme={theme} />
+      {shareInvite && <InviteDialog invite={shareInvite} onClose={() => setShareInvite(null)} />}
       {/* Spotify Connect Modal */}
       <SpotifyConnectModal
         open={showSpotifyModal}
@@ -1202,12 +1212,12 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
               <button
                 onClick={handleShareInvite}
                 className="room-invite inline-flex shrink-0 items-center gap-1 rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-semibold text-zinc-300 transition hover:bg-white/10 cursor-pointer"
-                aria-label={copiedLink ? 'Invite link copied' : 'Share invite link'}
+                aria-label="Share invite link"
               >
                 <span className="inline-flex items-center gap-1 sm:hidden">
-                  {copiedLink ? <Check size={16} aria-hidden="true" /> : <><Share2 size={16} aria-hidden="true" /> Share</>}
+                  <Share2 size={16} aria-hidden="true" /> Share
                 </span>
-                <span className="hidden sm:inline">{copiedLink ? 'Copied!' : 'Share invite'}</span>
+                <span className="hidden sm:inline">Share invite</span>
               </button>
             )}
 
@@ -1468,7 +1478,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                     try {
                       const ok = await ctxReloadPlayer();
                       if (ok) showToast('Player reloaded — resuming playback');
-                      else showToast('Player reload failed — try refreshing the page');
+                      else showToast('YouTube is still unavailable');
                     } finally {
                       setReloadingPlayer(false);
                     }
@@ -1971,9 +1981,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                   invite={isDemo ? null : {
                     code: roomCode,
                     copiedCode: copied,
-                    copiedLink,
                     onCopyCode: handleCopyCode,
-                    onCopyLink: handleCopyInviteLink,
                     onShareLink: handleShareInvite,
                   }}
                 />

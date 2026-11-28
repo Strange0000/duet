@@ -126,6 +126,37 @@ describe('RoomView renders a real room', () => {
     container.remove();
   });
 
+  it('shows every participant in a six-person lobby', () => {
+    const ctx = makeCtx();
+    const guest = ctx.roomState.participants[0];
+    ctx.roomState.participants = [guest, ...Array.from({ length: 5 }, (_, index) => ({
+      ...guest,
+      id: `guest-${index + 1}`,
+      name: `Guest ${index + 1}`,
+      role: 'guest',
+    }))];
+    ctx.partnerParticipant = ctx.roomState.participants[1];
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+
+    try {
+      act(() => root.render(
+        <RoomContext.Provider value={ctx}>
+          <RoomView onLeave={() => {}} />
+        </RoomContext.Provider>
+      ));
+      const lobbyButton = [...container.querySelectorAll('.room-desktop-tabs button')]
+        .find((button) => button.textContent === 'Lobby');
+      act(() => lobbyButton.click());
+      expect(container.querySelectorAll('.room-lobby-person')).toHaveLength(6);
+      expect(container.querySelector('.room-lobby').textContent).toContain('Guest 5');
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+    }
+  });
+
   it('inherits light mode while exposing all six shared room themes', () => {
     const ctx = makeCtx();
     ctx.roomState.settings.theme = 'ocean';
@@ -238,16 +269,19 @@ describe('invite share', () => {
     }
   });
 
-  it('falls back to copying the link when navigator.share is missing', async () => {
+  it('offers share targets when navigator.share is missing', async () => {
     delete navigator.share;
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
     const { container, root } = renderRoom();
     try {
       await act(async () => { shareButton(container).click(); });
-      expect(writeText).toHaveBeenCalledTimes(1);
-      expect(writeText).toHaveBeenCalledWith(expect.stringContaining('/room/TEST01'));
-      expect(container.querySelector('button[aria-label="Invite link copied"]')).not.toBeNull();
+      expect(writeText).not.toHaveBeenCalled();
+      const dialog = container.querySelector('dialog[open]');
+      expect(dialog.querySelector('a[href^="https://wa.me/"]')).not.toBeNull();
+      expect(dialog.querySelector('a[href^="mailto:"]')).not.toBeNull();
+      expect(dialog.querySelector('input').value).toContain('/room/TEST01');
+      expect(container.querySelector('dialog[open]')).not.toBeNull();
     } finally {
       act(() => root.unmount());
       container.remove();
@@ -265,14 +299,14 @@ describe('invite share', () => {
     try {
       await act(async () => { shareButton(container).click(); });
       expect(writeText).not.toHaveBeenCalled();
-      expect(container.querySelector('button[aria-label="Invite link copied"]')).toBeNull();
+      expect(container.querySelector('dialog[open]')).toBeNull();
     } finally {
       act(() => root.unmount());
       container.remove();
     }
   });
 
-  it('falls back to copying the link when sharing throws', async () => {
+  it('offers share targets when native sharing fails', async () => {
     const share = vi.fn().mockRejectedValue(new Error('Share failed'));
     Object.defineProperty(navigator, 'share', { value: share, configurable: true });
     const writeText = vi.fn().mockResolvedValue(undefined);
@@ -280,8 +314,11 @@ describe('invite share', () => {
     const { container, root } = renderRoom();
     try {
       await act(async () => { shareButton(container).click(); });
-      expect(writeText).toHaveBeenCalledTimes(1);
-      expect(writeText).toHaveBeenCalledWith(expect.stringContaining('/room/TEST01'));
+      expect(writeText).not.toHaveBeenCalled();
+      const dialog = container.querySelector('dialog[open]');
+      expect(dialog.querySelector('a[href^="https://wa.me/"]')).not.toBeNull();
+      expect(dialog.querySelector('a[href^="mailto:"]')).not.toBeNull();
+      expect(dialog.querySelector('input').value).toContain('/room/TEST01');
     } finally {
       act(() => root.unmount());
       container.remove();

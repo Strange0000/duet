@@ -10,7 +10,7 @@ import React, {
 import { INITIAL_TRACKS } from '../data/mockTracks';
 import { LocalAudioPlayer } from '../players/LocalAudioPlayer';
 import { SpotifyPlayer } from '../players/SpotifyPlayer';
-import { YouTubePlayer } from '../players/YouTubePlayer';
+import { preloadYouTubeAPI, YouTubePlayer } from '../players/YouTubePlayer';
 import { emitAck, generateCommandId, getSocket } from '../services/socketClient';
 import { backgroundAudio } from '../utils/backgroundAudio';
 import { ClockSync } from '../utils/clockSync';
@@ -123,6 +123,7 @@ export function RoomProvider({ children }) {
   }, []);
 
   const clockSyncRef = useRef(new ClockSync());
+  const clockSyncInFlightRef = useRef(null);
   const playerRef = useRef(null);
   const playerInitVersionRef = useRef(0);
   const playerContainerRef = useRef(null);
@@ -138,6 +139,7 @@ export function RoomProvider({ children }) {
   // skipped invocation is safe: the next broadcast (~1s later) retries
   // it with the latest state.
   const applyInFlightRef = useRef(false);
+  const pendingPlaybackRef = useRef(null);
   const roomStateRef = useRef(null);
   const sessionRef = useRef(null);
   // F2: whether THIS socket has been adopted into the room by the server
@@ -168,6 +170,7 @@ export function RoomProvider({ children }) {
   // R1: first-play stall watchdog — one retry, then a real error instead of
   // spinning on "Loading…" forever.
   const playWatchdogTimerRef = useRef(null);
+  const monitorPlaybackRef = useRef(null);
   const playWatchdogAttemptRef = useRef(0);
   // R1 (follow-up): signature of the last playback state actually applied
   // to the player. The server re-broadcasts room:state ~every second (each
@@ -320,17 +323,29 @@ export function RoomProvider({ children }) {
     }).catch(() => {});
   }, []);
 
-  const runClockSync = useCallback(async () => {
-    const metrics = await clockSyncRef.current.sync(
+  const runClockSync = useCallback(() => {
+    if (clockSyncInFlightRef.current) return clockSyncInFlightRef.current;
+    clockSyncInFlightRef.current = clockSyncRef.current.sync(
       (payload) => emitAck('sync:ping', payload, 3000),
       5
-    );
-    setSyncMetrics((prev) => ({
-      ...prev,
-      rttMs: metrics.rttMs,
-      clockOffsetMs: metrics.clockOffsetMs,
-      lastSyncedAtMs: metrics.lastSyncedAtMs,
-    }));
+    ).then((metrics) => {
+      setSyncMetrics((prev) => ({
+        ...prev,
+        rttMs: metrics.rttMs,
+        clockOffsetMs: metrics.clockOffsetMs,
+        lastSyncedAtMs: metrics.lastSyncedAtMs,
+      }));
+    }).finally(() => {
+      clockSyncInFlightRef.current = null;
+    });
+    return clockSyncInFlightRef.current;
+  }, []);
+
+  const getPlaybackLeadMs = useCallback(() => {
+    const participants = roomStateRef.current?.participants || [];
+    if (participants.filter((participant) => participant.connected).length < 2) return 0;
+    const rttMs = clockSyncRef.current.getMetrics().rttMs;
+    return Math.min(250, Math.max(80, rttMs + 55));
   }, []);
 
   // R6: adopt the room's playback position the moment a room state is
@@ -433,54 +448,48 @@ export function RoomProvider({ children }) {
       }
       playWatchdogAttemptRef.current = 0;
 
-      // R1: first-play stall watchdog. If the room is playing but the local
-      // player still has not started ~4s after we told it to play (and its
-      // position has not advanced), retry play() once; if it still has not
-      // started ~4s later, surface a real error instead of spinning on
-      // "Loading…"/"Buffering" forever. Cleared by onStateChange('playing')
-      // and by any newer playback state (above).
+      // A stalled YouTube embed gets one fresh load at the live room
+      // position. Repeated status packets must never restart this timer.
       const armStallWatchdog = (anchorMs) => {
+        if (playWatchdogTimerRef.current) return;
         const check = async () => {
           playWatchdogTimerRef.current = null;
-          if (playerRef.current !== player) return;
-          const p = playerRef.current;
-          const st = roomStateRef.current;
-          if (!p || !st?.playback || st.playback.playbackState !== 'playing') return;
-          if (st.playback.trackVersion !== playback.trackVersion || lastAppliedPlaybackRef.current !== signature) return;
-          let state = 'idle';
-          let pos = 0;
-          try {
-            state = await p.getState();
-          } catch {
-            // Treat as stalled below
-          }
-          try {
-            pos = await p.getPosition();
-          } catch {
-            // Treat as stalled below
-          }
-          if (playerRef.current !== p || lastAppliedPlaybackRef.current !== signature) return;
-          if (state === 'playing' || state === 'error' || pos - anchorMs >= 500) return;
-          if (playWatchdogAttemptRef.current < 1) {
-            playWatchdogAttemptRef.current += 1;
-            try {
-              await p.play();
-            } catch {
-              // Second check below will surface the error
+          const state = roomStateRef.current?.playback;
+          if (!audioUnlockedRef.current || playerRef.current !== player ||
+              state?.playbackState !== 'playing' || lastAppliedPlaybackRef.current !== signature) return;
+
+          const [playerStatus, position] = await Promise.all([
+            player.getState().catch(() => 'idle'),
+            player.getPosition().catch(() => anchorMs),
+          ]);
+          if (playerRef.current !== player || lastAppliedPlaybackRef.current !== signature ||
+              !audioUnlockedRef.current || playerStatus === 'error' || position - anchorMs >= 500) return;
+
+          if (playWatchdogAttemptRef.current === 0) {
+            playWatchdogAttemptRef.current = 1;
+            const latest = roomStateRef.current?.playback;
+            const targetMs = computeExpectedPositionMs(latest, clockSyncRef.current.estimateServerNowMs());
+            if (player instanceof YouTubePlayer) {
+              player.restartPlayback(targetMs);
+              anchorMs = targetMs;
+            } else {
+              await player.play().catch(() => {});
             }
-            // E-20: second attempt gets more time (8s) on slow mobile networks
-            playWatchdogTimerRef.current = setTimeout(check, 8000);
+            if (playerRef.current === player && lastAppliedPlaybackRef.current === signature && audioUnlockedRef.current) {
+              clearTimeout(playWatchdogTimerRef.current);
+              playWatchdogTimerRef.current = setTimeout(check, 7500);
+            }
             return;
           }
+
           setPlayerError({
             code: 'PLAY_STALLED',
-            message:
-              'Playback didn’t start — the video may still be loading or blocked. Try tapping Play again, or press Next.',
+            message: 'Playback is stalled. Try Reload player, or skip this track.',
           });
         };
-        // E-20: initial timeout increased from 4s to 6s for slow networks
-        playWatchdogTimerRef.current = setTimeout(check, 6000);
+        playWatchdogTimerRef.current = setTimeout(check, 5000);
       };
+      monitorPlaybackRef.current = playback.playbackState === 'playing' ? armStallWatchdog : null;
 
       const estimatedNow = clockSyncRef.current.estimateServerNowMs();
       const expectedMs = computeExpectedPositionMs(playback, estimatedNow);
@@ -561,20 +570,17 @@ export function RoomProvider({ children }) {
     []
   );
 
-  // Round 4: serialized wrapper around applyPlaybackToPlayerInner. The
-  // B1 effect fires on every room:state broadcast (~every second), and
-  // onError resets the dedup signature — so during a recovery the effect
-  // can re-enter while a previous invocation is still awaiting
-  // recoverIfFailed()/initialize(). A concurrent invocation could
-  // destroy a just-created player or double-issue the load. A skipped
-  // invocation is safe: the next broadcast (~1s later) retries it with
-  // the latest state.
   const applyPlaybackToPlayer = useCallback(
     async (playback, track) => {
+      pendingPlaybackRef.current = { playback, track };
       if (applyInFlightRef.current) return;
       applyInFlightRef.current = true;
       try {
-        await applyPlaybackToPlayerInner(playback, track);
+        while (pendingPlaybackRef.current) {
+          const next = pendingPlaybackRef.current;
+          pendingPlaybackRef.current = null;
+          await applyPlaybackToPlayerInner(next.playback, next.track).catch(() => {});
+        }
       } finally {
         applyInFlightRef.current = false;
       }
@@ -603,6 +609,8 @@ export function RoomProvider({ children }) {
       const callbacks = {
         onReady: () => {
           if (!isCurrent()) return;
+          playerStateRef.current = 'ready';
+          setPlayerState('ready');
           if (sessionRef.current) {
             emitAck('player:ready', { ready: true }).catch(() => {});
           }
@@ -622,7 +630,10 @@ export function RoomProvider({ children }) {
             // recovered, so clear it here.
             setPlayerError(null);
           }
-          if (state === 'playing' && playWatchdogTimerRef.current) {
+          if (state === 'buffering' && audioUnlockedRef.current) {
+            monitorPlaybackRef.current?.(lastPlayerPositionRef.current);
+          }
+          if (state === 'playing') {
             clearTimeout(playWatchdogTimerRef.current);
             playWatchdogTimerRef.current = null;
             playWatchdogAttemptRef.current = 0;
@@ -657,6 +668,13 @@ export function RoomProvider({ children }) {
               endedTrackVersion: st.playback.trackVersion,
             }).catch(() => {});
           }
+        },
+        onAutoplayBlocked: () => {
+          if (!isCurrent()) return;
+          clearTimeout(playWatchdogTimerRef.current);
+          playWatchdogTimerRef.current = null;
+          audioUnlockedRef.current = false;
+          setAudioUnlocked(false);
         },
         onError: (err) => {
           if (!isCurrent()) return;
@@ -703,7 +721,7 @@ export function RoomProvider({ children }) {
         } catch {
           // Ignore — volume can be re-applied later via setVolume/toggleMute
         }
-        if (!isCurrent()) return;
+        if (!isCurrent()) return false;
         setPlayerError(null);
 
         const st = roomStateRef.current;
@@ -713,9 +731,15 @@ export function RoomProvider({ children }) {
         if (st?.playback && trk) {
           await applyPlaybackToPlayer(st.playback, trk);
         }
+        return isCurrent();
       } catch (err) {
         if (playerRef.current !== adapter) await adapter.destroy();
-        if (isCurrent()) setPlayerError({ code: 'INIT_FAILED', message: err.message });
+        if (isCurrent()) {
+          playerStateRef.current = 'error';
+          setPlayerState('error');
+          setPlayerError({ code: 'INIT_FAILED', message: err.message });
+        }
+        return false;
       }
     },
     [applyPlaybackToPlayer]
@@ -738,7 +762,7 @@ export function RoomProvider({ children }) {
       setRoomState(res.state);
       seedPositionFromPlayback(res.state?.playback);
       setAudioUnlocked(true);
-      await runClockSync();
+      runClockSync();
       return res;
     },
     [runClockSync, seedPositionFromPlayback]
@@ -777,7 +801,7 @@ export function RoomProvider({ children }) {
               // (e.g. a theme change) landed while the socket was down.
               seedPositionFromPlayback(res.state?.playback);
               refreshRoomStateFromServer();
-              await runClockSync();
+              runClockSync();
               const trk =
                 res.state?.queue?.find((q) => q.queueItemId === res.state.currentQueueItemId)
                   ?.track || res.state?.queue?.[0]?.track;
@@ -1000,15 +1024,15 @@ export function RoomProvider({ children }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomState?.participants?.length]);
 
-  // B1: the single place that drives the player from the room state.
-  // Whenever the playback state or the current track changes, apply it to
-  // the player using the track read from the LATEST roomState (so a track
-  // change is never applied with a stale currentQueueItemId). This covers
-  // Next/Previous, play/pause, seek and track-end advance.
+  // Participant telemetry updates do not change the transport command.
+  const playbackSignature = computePlaybackSignature(currentTrack, roomState?.playback);
+  const playbackDurationMs = roomState?.playback?.durationMs;
   useEffect(() => {
-    if (!roomState?.playback || !currentTrack) return;
-    applyPlaybackToPlayer(roomState.playback, currentTrack).catch(() => {});
-  }, [applyPlaybackToPlayer, roomState?.playback, currentTrack]);
+    if (!playbackSignature) return;
+    const state = roomStateRef.current;
+    const track = state?.queue.find((item) => item.queueItemId === state.currentQueueItemId)?.track;
+    if (track) applyPlaybackToPlayer(state.playback, track).catch(() => {});
+  }, [applyPlaybackToPlayer, playbackSignature, playbackDurationMs]);
 
   // Periodic drift measurement & correction loop (every 1000ms while playing)
   useEffect(() => {
@@ -1277,6 +1301,7 @@ export function RoomProvider({ children }) {
   }, [runClockSync, refreshRoomStateFromServer]);
 
   const createRoom = useCallback(async ({ name = 'Host', source = 'youtube' } = {}) => {
+    if (source === 'youtube') preloadYouTubeAPI().catch(() => {});
     setRoomError(null);
     setConnectionStatus('connecting');
     const socket = getSocket();
@@ -1325,6 +1350,7 @@ export function RoomProvider({ children }) {
   }, [adoptCreatedRoom]);
 
   const joinRoom = useCallback(async ({ roomCode, name = 'Guest', source = 'youtube', sessionToken }) => {
+    if (source === 'youtube') preloadYouTubeAPI().catch(() => {});
     setRoomError(null);
     setConnectionStatus('connecting');
     const socket = getSocket();
@@ -1364,12 +1390,18 @@ export function RoomProvider({ children }) {
     seedPositionFromPlayback(res.state?.playback);
     refreshRoomStateFromServer();
     setAudioUnlocked(false); // Mobile guest requires gesture unlock
-    await runClockSync();
+    runClockSync();
     return res;
   }, [runClockSync, seedPositionFromPlayback, refreshRoomStateFromServer]);
 
   const leaveRoom = useCallback(async () => {
     playerInitVersionRef.current += 1;
+    pendingPlaybackRef.current = null;
+    monitorPlaybackRef.current = null;
+    clearTimeout(playWatchdogTimerRef.current);
+    playWatchdogTimerRef.current = null;
+    clearTimeout(scheduledPlayTimerRef.current);
+    scheduledPlayTimerRef.current = null;
     try {
       await emitAck('room:leave', {});
     } catch {
@@ -1431,7 +1463,10 @@ export function RoomProvider({ children }) {
   // usable again.
   const reloadPlayer = useCallback(async () => {
     const player = playerRef.current;
-    if (!player) return false;
+    if (!player) {
+      const source = myParticipant?.source || 'youtube';
+      return initPlayerForSource(source, playerContainerRef.current);
+    }
     setPlayerError(null);
     // A fresh instance has nothing applied yet — force a full re-apply.
     lastAppliedPlaybackRef.current = null;
@@ -1448,8 +1483,7 @@ export function RoomProvider({ children }) {
           st?.participants?.find((p) => sessionRef.current && p.id === sessionRef.current.participantId)?.source ||
           myParticipant?.source ||
           'youtube';
-        await initPlayerForSource(source, playerContainerRef.current);
-        ok = true;
+        ok = await initPlayerForSource(source, playerContainerRef.current);
       }
     } catch {
       ok = false;
@@ -1544,7 +1578,7 @@ export function RoomProvider({ children }) {
         if (canControl) {
           sendCommand('player:play', {
             positionMs: syncMetrics.reportedPositionMs || 0,
-            scheduleLeadMs: 250,
+            scheduleLeadMs: getPlaybackLeadMs(),
           });
         } else {
           playerRef.current?.play().catch(() => {});
@@ -1571,6 +1605,7 @@ export function RoomProvider({ children }) {
     roomState,
     session?.role,
     currentTrack,
+    getPlaybackLeadMs,
     sendCommand,
     syncMetrics.reportedPositionMs,
   ]);
@@ -1636,6 +1671,7 @@ export function RoomProvider({ children }) {
     leaveRoom,
     unlockAudio,
     runClockSync,
+    getPlaybackLeadMs,
     sendCommand,
     setPlayerError,
     setRoomError,

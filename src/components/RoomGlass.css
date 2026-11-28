@@ -198,3 +198,86 @@
     backdrop-filter: none;
   }
 }
+
+.room-share-dialog {
+  width: min(27rem, calc(100% - 2rem));
+  margin: auto;
+  padding: 1.25rem;
+  border: 1px solid var(--room-glass-edge);
+  border-radius: 1.125rem;
+  background: var(--room-surface);
+  color: var(--room-ink);
+  box-shadow: 0 20px 60px var(--room-shadow);
+}
+
+.room-share-dialog::backdrop {
+  background: rgb(8 5 20 / 60%);
+}
+
+.room-share-heading,
+.room-share-targets {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+}
+
+.room-share-heading {
+  justify-content: space-between;
+  font-size: 1.25rem;
+  font-weight: 750;
+}
+
+.room-share-heading button {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  border-radius: 0.625rem;
+  cursor: pointer;
+}
+
+.room-share-targets {
+  margin-block: 0.75rem 1rem;
+}
+
+.room-share-targets a {
+  display: grid;
+  flex: 1;
+  min-height: 44px;
+  place-items: center;
+  border: 1px solid var(--room-glass-edge);
+  border-radius: 0.625rem;
+  background: var(--room-field);
+  color: var(--room-ink);
+  font-size: 0.875rem;
+  font-weight: 750;
+}
+
+.room-share-targets a:hover,
+.room-share-heading button:hover {
+  background: var(--room-selection);
+  color: #171124;
+}
+
+.room-share-dialog label {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--room-muted);
+}
+
+.room-share-dialog input {
+  width: 100%;
+  min-height: 44px;
+  margin-top: 0.35rem;
+  padding-inline: 0.625rem;
+  border: 1px solid var(--room-glass-edge);
+  border-radius: 0.625rem;
+  background: var(--room-field);
+  font-size: 0.8125rem;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .room-share-dialog[open] {
+    animation: room-reveal 200ms ease-out both;
+  }
+}
