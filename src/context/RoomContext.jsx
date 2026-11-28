@@ -1297,12 +1297,9 @@ export function RoomProvider({ children }) {
     };
     document.addEventListener('visibilitychange', onVisibility);
 
-    // I-04: send a leave signal when the tab is closing. The browser fires
-    // `pagehide` (preferred for bfcache, mobile Safari) or `beforeunload`
-    // (desktop fallback). Socket.IO may send a close frame, but neither
-    // guarantees the server learns the person is gone quickly. This handler
-    // gives the server the best possible advance notice.
-    const onPageHide = () => {
+    // A page placed in the back-forward cache is suspended, not closed.
+    const onPageHide = (event) => {
+      if (event.persisted) return;
       const socket = getSocket();
       if (socket?.connected && sessionRef.current) {
         // Use the low-level `send` path — the tab is tearing down, so we
@@ -1317,12 +1314,15 @@ export function RoomProvider({ children }) {
       }
     };
     window.addEventListener('pagehide', onPageHide);
-    window.addEventListener('beforeunload', onPageHide);
+    const onPageShow = (event) => {
+      if (event.persisted) onVisibility();
+    };
+    window.addEventListener('pageshow', onPageShow);
 
     return () => {
       document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('pagehide', onPageHide);
-      window.removeEventListener('beforeunload', onPageHide);
+      window.removeEventListener('pageshow', onPageShow);
     };
   }, [runClockSync, refreshRoomStateFromServer]);
 
