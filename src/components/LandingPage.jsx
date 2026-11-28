@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  ArrowLeft, ArrowRight, ChevronDown, Headphones, Link2, Moon,
+  ArrowLeft, ArrowRight, ChevronDown, Github, Headphones, Instagram, Linkedin, Link2, Moon, Phone,
   Pause, Play, Radio, RotateCcw, Sun, Users, Youtube,
 } from 'lucide-react';
 import { INITIAL_TRACKS, SEARCH_CATALOG, formatTime } from '../data/mockTracks';
@@ -11,6 +11,12 @@ import './LandingPage.css';
 
 const HOME_THEME_KEY = 'duet_home_theme';
 const DEMO_TRACKS = [0, 1, 4];
+const CREATOR_LINKS = [
+  { label: 'Instagram', href: 'https://www.instagram.com/sumit_jaiswal__', icon: Instagram },
+  { label: 'Portfolio', href: 'https://strange0000.github.io/portfolio/', icon: Link2 },
+  { label: 'GitHub', href: 'https://github.com/Strange0000', icon: Github },
+  { label: 'LinkedIn', href: 'https://www.linkedin.com/in/sumit-jaiswal-6a3831347', icon: Linkedin },
+];
 
 const STEPS = [
   { icon: Users, title: 'Create a room', body: 'Start a private listening room in your browser.' },
@@ -491,7 +497,18 @@ export default function LandingPage({
       </main>
 
       <footer className="home-shell home-footer">
-        <a href="#home" className="home-brand" aria-label="Duet home"><Radio size={18} aria-hidden="true" />Duet</a>
+        <div className="home-footer-contact">
+          <a href="#home" className="home-brand" aria-label="Duet home"><Radio size={18} aria-hidden="true" />Duet</a>
+          <p>Built by <strong>Sumit Jaiswal (Strange)</strong></p>
+          <a className="home-link" href="tel:+917005319072"><Phone size={17} aria-hidden="true" />7005319072</a>
+        </div>
+        <div>
+          <h2>Find me online</h2>
+          <ul className="home-footer-socials">
+            {CREATOR_LINKS.map(({ label, href, icon: Icon }) => (
+              <li key={label}><a className="home-link" href={href}><Icon size={17} aria-hidden="true" />{label}</a></li>
+            ))}
+          </ul>
         <button
           type="button"
           className="home-link"
@@ -499,6 +516,7 @@ export default function LandingPage({
         >
           Privacy & Data
         </button>
+        </div>
       </footer>
 
       <dialog id="duet-privacy-modal" className="home-privacy" aria-labelledby="home-privacy-heading">
