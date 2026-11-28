@@ -49,7 +49,7 @@
   & .room-activity-surface {
     padding: clamp(0.5rem, 2.75vw, 1rem);
     border-radius: 1rem;
-    backdrop-filter: blur(12px) saturate(120%);
+    backdrop-filter: none;
   }
 
   & .room-activity-surface {
@@ -66,4 +66,8 @@
   .duet-room :is(.room-header, .room-mobile-nav, .room-player, .room-activity-surface, .room-partner, .room-notifications) {
     backdrop-filter: none;
   }
+}
+
+.duet-room[data-compact="true"] :is(.room-header, .room-mobile-nav, .room-notifications) {
+  backdrop-filter: none;
 }

@@ -3,8 +3,8 @@
 // is never served when the network is up (a stale shell produced a blank
 // page). Same-origin JS/CSS assets use runtime caching: successful GET
 // responses are cached and served cache-first.
-const CACHE_NAME = 'duet-shell-v2';
-const RUNTIME_CACHE = 'duet-runtime-v1';
+const CACHE_NAME = 'duet-shell-v3';
+const RUNTIME_CACHE = 'duet-runtime-v2';
 const SHELL_ASSETS = ['/', '/index.html', '/manifest.webmanifest', '/duet-icon.svg', '/hero-phones.jpg'];
 
 self.addEventListener('install', (event) => {
@@ -20,7 +20,7 @@ self.addEventListener('activate', (event) => {
       .keys()
       .then((keys) =>
         Promise.all(
-          keys.filter((k) => k !== CACHE_NAME && k !== RUNTIME_CACHE).map((k) => caches.delete(k))
+          keys.filter((k) => /^duet-(shell|runtime)-/.test(k) && k !== CACHE_NAME && k !== RUNTIME_CACHE).map((k) => caches.delete(k))
         )
       )
   );
@@ -49,7 +49,7 @@ self.addEventListener('fetch', (event) => {
   // Navigation: network-first — never serve a stale index.html while online.
   if (event.request.mode === 'navigate') {
     event.respondWith(
-      fetch(event.request)
+      fetch(event.request, { cache: 'no-cache' })
         .then((res) => {
           if (res.ok) {
             const copy = res.clone();
@@ -73,7 +73,7 @@ self.addEventListener('fetch', (event) => {
       caches.match(event.request).then((cached) => {
         if (cached) return cached;
         return fetch(event.request).then((res) => {
-          if (res.ok) {
+          if (res.ok && !res.headers.get('content-type')?.includes('text/html')) {
             const copy = res.clone();
             caches.open(RUNTIME_CACHE).then((cache) => cache.put(event.request, copy)).catch(() => {});
           }
