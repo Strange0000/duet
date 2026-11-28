@@ -9,7 +9,7 @@ const envSchema = z.object({
   CLIENT_ORIGIN: z.string().default('http://localhost:5173'),
   YOUTUBE_API_KEY: z.string().optional().default(''),
   ROOM_TTL_SECONDS: z.coerce.number().int().min(60).default(86400),
-  MAX_ROOM_PARTICIPANTS: z.coerce.number().int().min(2).max(10).default(2),
+  MAX_ROOM_PARTICIPANTS: z.coerce.number().int().min(2).max(10).default(6),
   ENABLE_SPOTIFY: z
     .string()
     .optional()

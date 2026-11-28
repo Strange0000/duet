@@ -246,7 +246,7 @@ export class RoomStore {
       return { error: 'Room not found or expired', code: 'ROOM_NOT_FOUND' };
     }
     if (room.participants.size >= this.maxParticipants) {
-      return { error: 'Room is full (maximum 2 participants)', code: 'ROOM_FULL' };
+      return { error: `Room is full (maximum ${this.maxParticipants} participants)`, code: 'ROOM_FULL' };
     }
     // Deduplicate by socketId, and by (name + source) for the same room (N-29):
     // a reconnecting guest must not accumulate duplicate pending requests.
@@ -366,7 +366,7 @@ export class RoomStore {
     }
 
     if (room.participants.size >= this.maxParticipants) {
-      return { error: 'Room is full (maximum 2 participants)', code: 'ROOM_FULL' };
+      return { error: `Room is full (maximum ${this.maxParticipants} participants)`, code: 'ROOM_FULL' };
     }
 
     const now = this._now();

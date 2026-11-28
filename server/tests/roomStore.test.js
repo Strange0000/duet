@@ -50,6 +50,26 @@ describe('RoomStore unit tests', () => {
     expect(third.code).toBe('ROOM_FULL');
   });
 
+  it('allows up to 6 participants and rejects the 7th with the real limit in the message', () => {
+    const sixStore = new RoomStore({ ttlMs: 60000, maxParticipants: 6, hostGraceMs: 5000 });
+    const host = sixStore.createRoom({ name: 'Host' });
+    for (let i = 1; i <= 5; i += 1) {
+      const guest = sixStore.joinRoom({ roomCode: host.room.code, name: `Guest${i}` });
+      expect(guest.error).toBeUndefined();
+      expect(guest.role).toBe('guest');
+    }
+    expect(sixStore.serializeRoom(host.room).participants).toHaveLength(6);
+
+    const seventh = sixStore.joinRoom({ roomCode: host.room.code, name: 'Seventh' });
+    expect(seventh.code).toBe('ROOM_FULL');
+    expect(seventh.error).toBe('Room is full (maximum 6 participants)');
+
+    // The approval path (requestJoin) reports the same limit.
+    const requested = sixStore.requestJoin({ roomCode: host.room.code, name: 'Eighth', socketId: 'sock-8' });
+    expect(requested.code).toBe('ROOM_FULL');
+    expect(requested.error).toBe('Room is full (maximum 6 participants)');
+  });
+
   it('enforces host authority on playback and queue mutations', () => {
     const host = store.createRoom({ name: 'Host', initialTracks: [sampleTrack, secondTrack] });
     const guest = store.joinRoom({ roomCode: host.room.code, name: 'Guest' });
