@@ -1751,28 +1751,28 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                   </p>
                   <p className="text-sm font-bold text-white">Playback Source</p>
                 </div>
-                <div role="group" aria-label="Playback source" className="room-source-options inline-flex w-full justify-between rounded-full border border-white/10 bg-white/5 p-1 sm:w-auto sm:justify-start">
+                <div role="group" aria-label="Playback source" className="room-source-options">
                   <button
+                    type="button"
                     disabled={!roomConnected}
                     onClick={() => handleSourceSwitch('youtube')}
                     aria-pressed={mySource === 'youtube'}
-                    className={`flex-1 rounded-full px-2.5 py-1.5 text-center text-xs font-semibold transition sm:flex-none sm:px-3.5 cursor-pointer ${
-                      mySource === 'youtube' ? 'bg-red-600 text-white' : 'text-zinc-400 hover:text-white'
-                    }`}
+                    className="room-button"
                   >
                     YouTube
                   </button>
                   <button
+                    type="button"
                     disabled={!roomConnected}
                     onClick={() => handleSourceSwitch('spotify')}
                     aria-pressed={usesSpotify || (isDemo && mySource === 'local')}
                     title="Full tracks with Spotify Premium"
-                    className={`flex-1 rounded-full px-2.5 py-1.5 text-center text-xs font-semibold transition sm:flex-none sm:px-3.5 cursor-pointer ${
-                      usesSpotify || (isDemo && mySource === 'local') ? 'bg-emerald-500 text-zinc-950' : 'text-zinc-300 hover:text-white'
-                    }`}
+                    className="room-button"
                   >
-                    <span className="block">{spotifyAvailable ? 'Audio Only' : spotifyAuth?.accessToken ? 'Manage Spotify' : 'Set up Spotify'}</span>
-                    <span className="block text-[10px]">{spotifyAvailable ? 'Spotify Premium' : spotifyAuth?.accessToken ? 'Premium required' : 'Client ID + Premium'}</span>
+                    <span>
+                      <span className="block">{spotifyAvailable ? 'Audio Only' : spotifyAuth?.accessToken ? 'Manage Spotify' : 'Set up Spotify'}</span>
+                      <span className="block text-[10px]">{spotifyAvailable ? 'Spotify Premium' : spotifyAuth?.accessToken ? 'Premium required' : 'Client ID + Premium'}</span>
+                    </span>
                   </button>
                 </div>
               </div>

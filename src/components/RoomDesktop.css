@@ -129,21 +129,6 @@
     letter-spacing: 0;
   }
 
-  & .room-source-options {
-    border-radius: 0.75rem;
-  }
-
-  & .room-source-options button {
-    min-height: 40px;
-    border-radius: 0.5rem;
-    color: var(--room-muted);
-  }
-
-  & .room-source-options button[aria-pressed="true"] {
-    background: var(--room-selection);
-    color: #15101b;
-  }
-
   & .room-stage {
     margin-top: 1.25rem;
   }

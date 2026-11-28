@@ -120,11 +120,13 @@ export default function RoomLobby({
             <h3 id="room-lobby-invite">Invite listeners</h3>
           </div>
           <div className="room-lobby-share">
-            <button type="button" onClick={invite.onCopyCode}>
-              <Copy size={16} aria-hidden="true" /> {invite.copiedCode ? 'Code copied' : invite.code}
+            <button className="room-button" type="button" onClick={invite.onCopyCode}>
+              <Copy size={16} aria-hidden="true" />
+              <span>{invite.copiedCode ? 'Code copied' : invite.code}</span>
             </button>
-            <button type="button" onClick={invite.onShareLink}>
-              <Share2 size={16} aria-hidden="true" /> Share invite
+            <button className="room-button" type="button" onClick={invite.onShareLink}>
+              <Share2 size={16} aria-hidden="true" />
+              <span>Share invite</span>
             </button>
           </div>
         </section>
