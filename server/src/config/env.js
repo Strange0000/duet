@@ -35,6 +35,9 @@ export const env = {
   ALLOWED_ORIGINS: baseOrigins,
   // E-05: returns true for any Netlify preview address shape, including
   // branch deploys like `some-feature--duet-music.netlify.app`.
+  // Cloudflare Pages (free hosting, no badge): production is
+  // duet-music.pages.dev; branch deploys are <branch>.duet-music.pages.dev
+  // and deploy previews are <commit>.duet-music.pages.dev.
   isAllowedOrigin(origin) {
     if (!origin) return true; // N-30: same-origin / CLI — accepted on purpose
     if (baseOrigins.includes(origin) || baseOrigins.includes('*')) return true;
@@ -42,12 +45,21 @@ export const env = {
     // Netlify branch deploys:  <branch>--duet-music.netlify.app
     // Netlify deploy permalinks: deploy-preview-<n>--duet-music.netlify.app
     // Netlify production: duet-music.netlify.app
+    // Cloudflare Pages production: duet-music.pages.dev
+    // Cloudflare Pages branch deploys: <branch>.duet-music.pages.dev
+    // Cloudflare Pages deploy previews: <commit>.duet-music.pages.dev
+    // Second Pages project (new address): duet-music-app.pages.dev,
+    // with the same <branch>. / <commit>. subdomain shapes.
     try {
       const url = new URL(origin);
       if (
         url.hostname === 'duet-music.netlify.app' ||
         url.hostname.endsWith('--duet-music.netlify.app') ||
         (url.hostname.endsWith('.netlify.app') && url.hostname.includes('duet')) ||
+        url.hostname === 'duet-music.pages.dev' ||
+        url.hostname.endsWith('.duet-music.pages.dev') ||
+        url.hostname === 'duet-music-app.pages.dev' ||
+        url.hostname.endsWith('.duet-music-app.pages.dev') ||
         url.hostname === 'localhost' ||
         url.hostname === '127.0.0.1'
       ) {
