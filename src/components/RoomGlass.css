@@ -328,6 +328,8 @@
 }
 
 .duet-room[data-compact="true"] .room-code {
+  gap: 0.125rem;
+  padding-inline: 0.375rem;
   font-variant-numeric: tabular-nums;
 }
 

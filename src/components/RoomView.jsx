@@ -1315,11 +1315,11 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
             >
               <ArrowLeft className="h-3.5 w-3.5" />
             </button>
-            <div className="room-wordmark flex shrink-0 items-center gap-1.5 sm:gap-2">
-              <span className="room-brand-icon flex h-7 w-7 items-center justify-center rounded-lg bg-white text-zinc-950">
+            <div className="room-wordmark flex shrink-0 items-center gap-1.5 sm:gap-2" role="img" aria-label="Duet">
+              <span className="room-brand-icon flex h-7 w-7 items-center justify-center rounded-lg bg-white text-zinc-950" aria-hidden="true">
                 <Radio className="h-3.5 w-3.5" />
               </span>
-              <span className="font-display text-base font-bold tracking-tight">Duet</span>
+              <span className="room-brand-name font-display text-base font-bold tracking-tight" aria-hidden="true">Duet</span>
             </div>
 
             {isDemo && (

@@ -358,10 +358,22 @@
   }
 
   .room-wordmark {
+    gap: 0.25rem;
     padding-inline: 0.125rem;
   }
 
-  .room-brand-icon,
+  .room-wordmark .room-brand-icon {
+    width: 1.125rem;
+    height: 1.125rem;
+    background: transparent;
+    color: var(--room-action);
+  }
+
+  .room-brand-icon > svg {
+    width: 100%;
+    height: 100%;
+  }
+
   .room-demo-badge,
   .room-desktop-tabs {
     display: none;
@@ -931,6 +943,12 @@
     color: #280b13;
     text-align: center;
     font-size: 0.625rem;
+  }
+}
+
+@media (max-width: 389px) {
+  .room-wordmark .room-brand-name {
+    display: none;
   }
 }
 
