@@ -11,6 +11,15 @@ import {
 } from '../src/utils/playbackSync.js';
 
 describe('ClockSync & PlaybackSync', () => {
+  it('keeps a usable clock when a ping acknowledgment is missing timestamps', async () => {
+    const clock = new ClockSync();
+    await clock.sync(async () => ({ ok: true }), 1);
+
+    expect(clock.getMetrics().sampleCount).toBe(0);
+    expect(clock.getMetrics().clockOffsetMs).toBe(0);
+    expect(Number.isFinite(clock.estimateServerNowMs())).toBe(true);
+  });
+
   it('computes expected position accurately for playing and paused states', () => {
     const playing = {
       playbackState: 'playing',
@@ -282,4 +291,10 @@ describe('Round 4: duration reporting + partner drift', () => {
     // No partner position to compare against: anchor drift alone decides.
     expect(resolvePlaybackStatus({ ...base, partnerDriftMs: null })).toBe('in-sync');
   });
+});
+
+it('spaces out repeated seeks for a device with a slower buffer', () => {
+  const sample = { expectedMs: 20000, actualMs: 17000, lastCorrectionAtMs: 1000, minSeekIntervalMs: 8000 };
+  expect(evaluateDriftCorrection({ ...sample, nowMs: 6000 }).action).toBe('cooldown');
+  expect(evaluateDriftCorrection({ ...sample, nowMs: 9000 }).action).toBe('seek');
 });

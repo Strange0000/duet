@@ -4,6 +4,14 @@
   display: none;
 }
 
+.room-video-frame iframe {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
 .room-search-results {
   max-height: 400px;
 }
@@ -86,20 +94,7 @@
 }
 
 .room-lobby-approval {
-  display: inline-flex;
-  min-height: 44px;
-  align-items: center;
-  gap: 0.625rem;
-  margin-bottom: 0.5rem;
-  color: var(--room-ink);
-  font-size: 0.8125rem;
-  cursor: pointer;
-}
-
-.room-lobby-approval input {
-  width: 1.15rem;
-  height: 1.15rem;
-  accent-color: var(--room-selection);
+  margin-bottom: .5rem;
 }
 
 .room-lobby-list {
@@ -160,40 +155,21 @@
   color: #a7f3d0;
 }
 
-.room-lobby-actions,
-.room-lobby-share {
+.room-lobby-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 0.375rem;
 }
 
-.room-lobby button,
-.room-lobby-notice {
-  display: inline-flex;
-  min-height: 44px;
-  align-items: center;
-  justify-content: center;
-  gap: 0.375rem;
-  padding-inline: 0.75rem;
-  border: 1px solid var(--room-edge);
-  border-radius: 0.625rem;
-  background: var(--room-surface);
-  color: var(--room-ink);
-  font-size: 0.75rem;
-  font-weight: 750;
-  cursor: pointer;
+.room-lobby-share,
+.room-source-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
 }
 
-.room-lobby button:disabled {
-  cursor: progress;
-  opacity: 0.65;
-}
-
-.room-lobby-notice,
-.room-lobby-actions button:last-child {
-  border-color: transparent;
-  background: var(--room-selection);
-  color: #15101b;
+.room-lobby-share svg {
+  flex: none;
 }
 
 .room-lobby-notice {
@@ -460,27 +436,6 @@
     background: var(--room-surface);
   }
 
-  .room-settings > div,
-  .room-settings > div > div:first-child {
-    display: grid;
-    gap: 0.25rem;
-  }
-
-  .room-settings label {
-    min-height: 44px;
-    gap: 0.75rem;
-    color: var(--room-ink);
-    font-size: 0.875rem;
-  }
-
-  .room-settings input[type="checkbox"] {
-    width: 1.125rem;
-    height: 1.125rem;
-  }
-
-  .room-settings button {
-    font-size: 0.75rem;
-  }
 
   .room-main {
     padding: 1rem 1rem calc(var(--room-bottom) + 1rem);
@@ -796,24 +751,8 @@
     font-weight: 600;
   }
 
-  .room-source-options {
-    width: 100%;
-    border-radius: 0.875rem;
-    background: var(--room-surface);
-  }
-
-  .room-source-options button {
-    min-height: 44px;
-    flex: 1;
-    padding-inline: 0.375rem;
-    border-radius: 0.625rem;
-    color: var(--room-muted);
-    font-size: 0.8125rem;
-  }
-
-  .room-source-options button[aria-pressed="true"] {
-    background: var(--room-selection);
-    color: #15101b;
+  .room-source-options > button {
+    flex: 1 1 auto;
   }
 
   .room-partner {

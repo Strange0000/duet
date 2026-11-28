@@ -3,7 +3,7 @@
  */
 export function computeExpectedPositionMs(playback, estimatedServerNowMs) {
   if (!playback) return 0;
-  const durationMs = Math.max(0, playback.durationMs || 0);
+  const durationMs = playback.durationMs > 0 ? playback.durationMs : Infinity;
   const anchorPos = Math.max(0, Math.min(durationMs, playback.anchorPositionMs || 0));
 
   if (playback.playbackState !== 'playing') {
@@ -214,6 +214,7 @@ export function evaluateDriftCorrection({
   lastCorrectionAtMs = 0,
   consecutiveModerateCount = 0,
   nowMs = Date.now(),
+  minSeekIntervalMs = 0,
   // Real player duration in ms (from player.getDuration()). When the player
   // is within 1500ms of its real end, the track is ending naturally — never
   // seek it back, or onEnded never fires (N-02 / B2).
@@ -256,7 +257,7 @@ export function evaluateDriftCorrection({
 
   if (absDrift <= 1000) {
     const nextCount = consecutiveModerateCount + 1;
-    const cooldownOk = nowMs - lastCorrectionAtMs >= 2500;
+    const cooldownOk = nowMs - lastCorrectionAtMs >= Math.max(2500, minSeekIntervalMs);
     if (nextCount >= 2 && cooldownOk) {
       return {
         action: 'seek',
@@ -275,7 +276,7 @@ export function evaluateDriftCorrection({
   }
 
   // > 1000ms
-  const cooldownOk = nowMs - lastCorrectionAtMs >= 1500;
+  const cooldownOk = nowMs - lastCorrectionAtMs >= Math.max(1500, minSeekIntervalMs);
   return {
     action: cooldownOk ? 'seek' : 'cooldown',
     targetMs: Math.round(expectedMs),

@@ -5,11 +5,14 @@ import {
 } from 'lucide-react';
 import { INITIAL_TRACKS, SEARCH_CATALOG, formatTime } from '../data/mockTracks';
 import { fetchSongArtwork } from '../utils/artworkApi';
-import { getStoredSpotifyAuth } from '../utils/spotifyAuth';
+import { canUseSpotify, getStoredSpotifyAuth } from '../utils/spotifyAuth';
 import SpotifyConnectModal from './SpotifyConnectModal';
+import { getGlassAppearance, HOME_THEME_KEY } from '../utils/appearance';
+import heroArtwork from '../assets/duet-headphones.webp';
+import heroArtworkSmall from '../assets/duet-headphones-small.webp';
+import heroArtworkFallback from '../assets/duet-headphones-fallback.jpg?inline';
 import './LandingPage.css';
 
-const HOME_THEME_KEY = 'duet_home_theme';
 const DEMO_TRACKS = [0, 1, 4];
 const CREATOR_LINKS = [
   { label: 'Instagram', href: 'https://www.instagram.com/sumit_jaiswal__', icon: Instagram },
@@ -27,7 +30,7 @@ const STEPS = [
 const FAQS = [
   {
     q: 'Does my friend need Spotify Premium?',
-    a: 'Your friend can use YouTube for free. Audio Only uses Spotify Premium and requires Spotify developer app setup.',
+    a: 'Your friend can use YouTube for free. For Audio Only, you need your own Spotify developer app (Client ID) and each Spotify listener needs Premium.',
   },
   {
     q: 'Does Duet work on iPhone and Android?',
@@ -43,22 +46,12 @@ const FAQS = [
   },
 ];
 
-function getHomeTheme() {
-  try {
-    const saved = localStorage.getItem(HOME_THEME_KEY);
-    if (saved === 'light' || saved === 'dark') return saved;
-  } catch {
-    // Use the system preference when storage is unavailable.
-  }
-  return window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
-}
-
 const TRENDING_SONGS = [
   { img: '/cover-midnight.jpg', title: 'Midnight City', artist: 'M83' },
   { img: '/cover-instant.jpg', title: 'Instant Crush', artist: 'Daft Punk' },
   { img: '/cover-resonance.jpg', title: 'Resonance', artist: 'HOME' },
   { img: '/cover-synth.jpg', title: 'Blinding Lights', artist: 'The Weeknd' },
-  { img: 'https://i.ytimg.com/vi/Kp7eSUU9oy8/hqdefault.jpg', title: 'Redbone', artist: 'Childish Gambino' },
+  { img: 'https://i.ytimg.com/vi/nxuzYWcY2O0/hqdefault.jpg', title: 'Redbone', artist: 'Childish Gambino' },
   { img: '/cover-indie.jpg', title: 'The Less I Know The Better', artist: 'Tame Impala' },
   { img: '/cover-synth.jpg', title: 'Starboy', artist: 'The Weeknd' },
   { img: '/cover-instant.jpg', title: 'After Dark', artist: 'Mr.Kitty' },
@@ -72,6 +65,9 @@ function friendlyRoomError(err) {
   const text = String(err);
   if (/not found|expired|ROOM_NOT_FOUND/i.test(text)) {
     return 'Room not found or expired. Check the code, ask the host for a new link, or start your own room.';
+  }
+  if (/Request timed out \(room:(create|join)\)/i.test(text)) {
+    return 'Duet couldn’t reach the room server in time. Check your connection and try again.';
   }
   if (/full|ROOM_FULL/i.test(text)) {
     // The server error carries the real limit ("maximum 6 participants");
@@ -274,13 +270,14 @@ export default function LandingPage({
   roomLoading,
   roomError,
   pendingApproval,
+  homeTheme,
+  setHomeTheme,
 }) {
   const [joinCode, setJoinCode] = useState('');
   const [joinErr, setJoinErr] = useState('');
   const [connectOpen, setConnectOpen] = useState(false);
-  const [homeTheme, setHomeTheme] = useState(getHomeTheme);
   const [spotifyModalOpen, setSpotifyModalOpen] = useState(false);
-  const [connectedSource, setConnectedSource] = useState(() => getStoredSpotifyAuth()?.accessToken ? 'spotify' : 'youtube');
+  const [connectedSource, setConnectedSource] = useState(() => canUseSpotify() ? 'spotify' : 'youtube');
   const [spotifyAuth, setSpotifyAuth] = useState(getStoredSpotifyAuth);
   const connectButtonRef = useRef(null);
   const nextTheme = homeTheme === 'light' ? 'dark' : 'light';
@@ -314,7 +311,7 @@ export default function LandingPage({
 
   const selectSource = (source) => {
     setConnectOpen(false);
-    if (source === 'spotify' && !spotifyAuth?.accessToken) {
+    if (source === 'spotify' && !canUseSpotify(spotifyAuth)) {
       setSpotifyModalOpen(true);
     } else {
       setConnectedSource(source);
@@ -334,9 +331,11 @@ export default function LandingPage({
   };
 
   const createRoom = () => onCreateRoom(connectedSource);
+  const [glass] = useState(getGlassAppearance);
+  const [heroImageFailed, setHeroImageFailed] = useState(false);
 
   return (
-    <div className="duet-home" data-theme={homeTheme} id="home">
+    <div className="duet-home" data-theme={homeTheme} data-glass={glass ? 'on' : 'off'} id="home">
       <SpotifyConnectModal
         open={spotifyModalOpen}
         onClose={() => { setSpotifyModalOpen(false); connectButtonRef.current?.focus(); }}
@@ -381,7 +380,7 @@ export default function LandingPage({
                     <Youtube size={20} aria-hidden="true" /><span><strong>YouTube</strong><small>Free with video</small></span>
                   </button>
                   <button type="button" aria-pressed={connectedSource === 'spotify'} onClick={() => selectSource('spotify')}>
-                    <Headphones size={20} aria-hidden="true" /><span><strong>Audio Only</strong><small>Original tracks via Spotify Premium</small></span>
+                    <Headphones size={20} aria-hidden="true" /><span><strong>{canUseSpotify(spotifyAuth) ? 'Audio Only' : spotifyAuth?.accessToken ? 'Manage Spotify' : 'Set up Spotify'}</strong><small>{canUseSpotify(spotifyAuth) ? 'Spotify Premium' : 'Premium required'}</small></span>
                   </button>
                 </div>
               )}
@@ -432,17 +431,23 @@ export default function LandingPage({
               )}
             </div>
           </div>
-          <div className="home-hero-art">
+          <figure className="home-hero-art">
             <img
-              src="/home/headphones.webp"
-              srcSet="/home/headphones-small.webp 640w, /home/headphones.webp 1320w"
+              src={heroImageFailed ? heroArtworkFallback : heroArtwork}
+              srcSet={heroImageFailed ? undefined : `${heroArtworkSmall} 640w, ${heroArtwork} 1320w`}
+              onError={heroImageFailed ? undefined : () => setHeroImageFailed(true)}
               sizes="(max-width: 899px) 94vw, 55vw"
               width="1320"
-              height="880"
+              height="990"
               fetchPriority="high"
-              alt="Two pairs of headphones on layers of violet glass"
+              alt="Lavender and plum headphones on a smoked violet surface"
             />
-          </div>
+            <div className="home-hero-spectrum" aria-hidden="true">
+              {[22, 38, 53, 29, 66, 44, 77, 48, 33, 58, 40, 23].map((height, index) => (
+                <i key={index} style={{ '--bar-height': `${height}%`, '--bar-delay': `${index * -90}ms` }} />
+              ))}
+            </div>
+          </figure>
         </section>
 
         <section id="features" className="home-section home-shell">
@@ -475,7 +480,7 @@ export default function LandingPage({
           <div className="home-story-copy">
             <h2>Hear the drop together.</h2>
             <p>Queue up the tracks you keep coming back to and chat while you listen. When a friend joins, Duet catches them up to the host’s spot in the song.</p>
-            <p><strong>Pick your playback source.</strong> Use YouTube for free or stream a matching track without video through Spotify Premium.</p>
+            <p><strong>Pick your playback source.</strong> Use YouTube for free. Spotify Audio Only requires your own Spotify developer app (Client ID) and a Premium account for each Spotify listener.</p>
           </div>
         </section>
 

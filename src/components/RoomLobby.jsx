@@ -1,5 +1,6 @@
 import React from 'react';
-import { Copy, Link2, UserRound } from 'lucide-react';
+import { Copy, Share2, UserRound } from 'lucide-react';
+import RoomSwitch from './RoomSwitch';
 
 const SOURCE_LABELS = {
   youtube: 'YouTube',
@@ -17,6 +18,7 @@ export default function RoomLobby({
   respondingToJoin,
   onRespondToJoin,
   onSwitchDemoSource,
+  onSelectHost,
   invite,
 }) {
   return (
@@ -28,15 +30,9 @@ export default function RoomLobby({
             <span role="status">{pendingJoins.length} waiting</span>
           </div>
           {canManage && (
-            <label className="room-lobby-approval">
-              <input
-                type="checkbox"
-                role="switch"
-                checked={approvalRequired}
-                onChange={(event) => onApprovalChange(event.target.checked)}
-              />
+            <RoomSwitch checked={approvalRequired} onChange={onApprovalChange} className="room-lobby-approval">
               Require approval to join
-            </label>
+            </RoomSwitch>
           )}
           {pendingJoins.length === 0 ? (
             <p className="room-lobby-muted">
@@ -82,7 +78,19 @@ export default function RoomLobby({
         <ul className="room-lobby-list">
           {participants.map((participant) => (
             <li key={participant.id} className="room-lobby-person">
-              <span className="room-lobby-avatar"><UserRound size={18} aria-hidden="true" /></span>
+              {onSelectHost && participant.canTransferHost ? (
+                <button
+                  type="button"
+                  className="room-button room-lobby-avatar"
+                  aria-label={`Make ${participant.name} host`}
+                  title={`Make ${participant.name} host`}
+                  onClick={() => onSelectHost(participant.id)}
+                >
+                  <UserRound size={18} aria-hidden="true" />
+                </button>
+              ) : (
+                <span className="room-lobby-avatar"><UserRound size={18} aria-hidden="true" /></span>
+              )}
               <div>
                 <p>{participant.name} {participant.isSelf && <span>(you)</span>}</p>
                 <span>
@@ -109,14 +117,16 @@ export default function RoomLobby({
       {invite && (
         <section aria-labelledby="room-lobby-invite">
           <div className="room-lobby-heading">
-            <h3 id="room-lobby-invite">Invite a partner</h3>
+            <h3 id="room-lobby-invite">Invite listeners</h3>
           </div>
           <div className="room-lobby-share">
-            <button type="button" onClick={invite.onCopyCode}>
-              <Copy size={16} aria-hidden="true" /> {invite.copiedCode ? 'Code copied' : invite.code}
+            <button className="room-button" type="button" onClick={invite.onCopyCode}>
+              <Copy size={16} aria-hidden="true" />
+              <span>{invite.copiedCode ? 'Code copied' : invite.code}</span>
             </button>
-            <button type="button" onClick={invite.onCopyLink}>
-              <Link2 size={16} aria-hidden="true" /> {invite.copiedLink ? 'Link copied' : 'Copy invite link'}
+            <button className="room-button" type="button" onClick={invite.onShareLink}>
+              <Share2 size={16} aria-hidden="true" />
+              <span>Share invite</span>
             </button>
           </div>
         </section>
