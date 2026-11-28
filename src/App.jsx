@@ -170,6 +170,8 @@ function DuetAppShell() {
     pendingApproval,
     createRoom,
     joinRoom,
+    sendCommand,
+    connectionStatus,
     clearRoomError,
     setRoomError,
   } = useRoom();
@@ -181,6 +183,7 @@ function DuetAppShell() {
   const [demoState, setDemoState] = useState(null);
   const [roomLoading, setRoomLoading] = useState(false);
   const [spotifyCallbackError, setSpotifyCallbackError] = useState('');
+  const [spotifyRoomCode, setSpotifyRoomCode] = useState(null);
   const [roomNotFound, setRoomNotFound] = useState(null);
   const [isHandlingSpotifyCallback, setIsHandlingSpotifyCallback] = useState(
     () => window.location.pathname === '/spotify-callback'
@@ -193,6 +196,7 @@ function DuetAppShell() {
     }
   });
   const joinAttemptedRef = useRef(null);
+  const spotifyCallbackStartedRef = useRef(false);
 
   const clearError = () => {
     if (typeof clearRoomError === 'function') clearRoomError();
@@ -201,9 +205,12 @@ function DuetAppShell() {
 
   // Handle /spotify-callback OAuth PKCE redirect
   useEffect(() => {
-    if (!isHandlingSpotifyCallback) return;
+    if (!isHandlingSpotifyCallback || spotifyCallbackStartedRef.current) return;
+    spotifyCallbackStartedRef.current = true;
     handleSpotifyCallback(window.location.search)
       .then(({ returnPath }) => {
+        const roomMatch = /^\/room\/([A-Z2-9]{6})$/i.exec(returnPath.split('?')[0]);
+        if (roomMatch) setSpotifyRoomCode(roomMatch[1].toUpperCase());
         window.history.replaceState(null, '', returnPath || '/');
         setIsHandlingSpotifyCallback(false);
       })
@@ -213,6 +220,12 @@ function DuetAppShell() {
         setIsHandlingSpotifyCallback(false);
       });
   }, [isHandlingSpotifyCallback]);
+
+  useEffect(() => {
+    if (!spotifyRoomCode || roomState?.roomCode !== spotifyRoomCode || connectionStatus !== 'connected') return;
+    setSpotifyRoomCode(null);
+    sendCommand('participant:update', { source: 'spotify' });
+  }, [connectionStatus, roomState?.roomCode, sendCommand, spotifyRoomCode]);
 
   // M7: clear any stale room error when the landing page mounts.
   useEffect(() => {

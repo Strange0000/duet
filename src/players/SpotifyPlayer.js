@@ -70,6 +70,7 @@ export class SpotifyPlayer extends BasePlayer {
     this.isReady = false;
     this.state = 'idle';
     this.currentUri = null;
+    this.trackStarted = false;
     this.lastPositionMs = 0;
     this.lastDurationMs = 0;
     this.lastUpdateMono = 0;
@@ -154,7 +155,7 @@ export class SpotifyPlayer extends BasePlayer {
       this.player.addListener('account_error', () => {
         const err = {
           code: 'SPOTIFY_PREMIUM_REQUIRED',
-          message: 'Spotify Premium is required to stream music in the browser. Switch to YouTube or Audio Only if you use Spotify Free.',
+          message: 'Spotify Premium is required to stream music in the browser. Choose YouTube if you use Spotify Free.',
         };
         this.callbacks.onError?.(err);
         if (!settled) {
@@ -168,7 +169,7 @@ export class SpotifyPlayer extends BasePlayer {
       });
 
       this.player.addListener('player_state_changed', (state) => {
-        if (!state) return;
+        if (!state || !this.trackStarted || state.track_window?.current_track?.uri !== this.currentUri) return;
         this.lastPositionMs = state.position || 0;
         this.lastDurationMs = state.duration || 0;
         this.lastUpdateMono = performance.now();
@@ -201,70 +202,91 @@ export class SpotifyPlayer extends BasePlayer {
     });
   }
 
-  async loadTrack(track, startPositionMs = 0, _shouldPlay = false) {
-    const token = await getValidSpotifyToken();
-    if (!token || !this.deviceId) return;
-
-    const uri = await resolveSpotifyUri(track, token);
-    if (!uri) {
-      this.callbacks.onError?.({
-        code: 'SPOTIFY_NOT_FOUND',
-        message: `Could not find "${track?.title || 'this track'}" on Spotify.`,
-      });
-      return;
+  async unlockAudio() {
+    try {
+      await this.player?.activateElement?.();
+    } catch {
+      // The SDK will report a playback error if the browser still blocks playback.
     }
+  }
 
-    if (this.currentUri === uri) {
-      await this.seek(startPositionMs);
-      return;
-    }
-
-    this.currentUri = uri;
-    // R5: the previous track's duration stays in lastDurationMs until the
-    // SDK reports the new track's state — never report it as this track's.
+  async loadTrack(track, startPositionMs = 0, shouldPlay = false) {
+    this.currentUri = null;
+    this.trackStarted = false;
+    this.wasPlaying = false;
     this.lastDurationMs = 0;
-    this.lastPositionMs = startPositionMs;
+    this.lastPositionMs = Math.max(0, Math.round(startPositionMs));
     this.lastUpdateMono = performance.now();
+    this.state = 'paused';
+    this.callbacks.onStateChange?.('paused');
 
-    const res = await fetch(
-      `https://api.spotify.com/v1/me/player/play?device_id=${encodeURIComponent(this.deviceId)}`,
-      {
-        method: 'PUT',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          uris: [uri],
-          position_ms: Math.max(0, Math.round(startPositionMs)),
-        }),
+    try {
+      await this.pause();
+      const token = await getValidSpotifyToken();
+      if (!token) {
+        this.state = 'error';
+        this.callbacks.onError?.({ code: 'SPOTIFY_AUTH', message: 'Reconnect Spotify to use Audio Only.' });
+        return;
       }
-    );
-
-    if (!res.ok) {
-      const errBody = await res.json().catch(() => ({}));
-      const msg =
-        res.status === 403
-          ? 'Spotify Premium is required to play full tracks in the browser.'
-          : errBody?.error?.message || `Spotify playback failed (${res.status})`;
-      this.callbacks.onError?.({ code: 'SPOTIFY_PLAY_FAILED', message: msg });
+      this.currentUri = await resolveSpotifyUri(track, token);
+      if (!this.currentUri) {
+        this.state = 'error';
+        this.callbacks.onError?.({
+          code: 'SPOTIFY_NOT_FOUND',
+          message: `No matching Spotify recording for “${track?.title || 'this track'}”. Choose YouTube to play it.`,
+        });
+        return;
+      }
+      if (shouldPlay) await this.play();
+    } catch {
+      this.state = 'error';
+      this.callbacks.onError?.({ code: 'SPOTIFY_PLAY_FAILED', message: 'Spotify could not load this track. Try resyncing or choose YouTube.' });
     }
   }
 
   async play() {
-    if (!this.player) return;
+    if (!this.player || !this.currentUri || !this.deviceId) return;
+    const player = this.player;
+    const device = this.deviceId;
+    const uri = this.currentUri;
     try {
-      await this.player.activateElement?.();
-      await this.player.resume();
-    } catch {
-      // Fallback via Web API if SDK resume fails
-      const token = await getValidSpotifyToken();
-      if (token && this.deviceId) {
-        await fetch(
-          `https://api.spotify.com/v1/me/player/play?device_id=${encodeURIComponent(this.deviceId)}`,
-          { method: 'PUT', headers: { Authorization: `Bearer ${token}` } }
-        ).catch(() => {});
+      if (this.trackStarted) {
+        try {
+          await player.resume();
+          return;
+        } catch {
+          // Retry through the Web API using the same track and position.
+        }
       }
+
+      const token = await getValidSpotifyToken();
+      if (this.player !== player || this.currentUri !== uri) return;
+      if (!token) {
+        this.state = 'error';
+        this.callbacks.onError?.({ code: 'SPOTIFY_AUTH', message: 'Reconnect Spotify to use Audio Only.' });
+        return;
+      }
+
+      this.trackStarted = true;
+      const res = await fetch(
+        `https://api.spotify.com/v1/me/player/play?device_id=${encodeURIComponent(device)}`,
+        {
+          method: 'PUT',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ uris: [uri], position_ms: this.lastPositionMs }),
+        }
+      );
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        throw new Error(res.status === 403
+          ? 'Spotify Premium is required to play full tracks in the browser.'
+          : errBody?.error?.message || `Spotify playback failed (${res.status})`);
+      }
+    } catch (error) {
+      if (this.player !== player || this.currentUri !== uri) return;
+      this.trackStarted = false;
+      this.state = 'error';
+      this.callbacks.onError?.({ code: 'SPOTIFY_PLAY_FAILED', message: error.message });
     }
   }
 
@@ -274,16 +296,15 @@ export class SpotifyPlayer extends BasePlayer {
   }
 
   async seek(positionMs) {
-    if (!this.player) return;
     this.lastPositionMs = Math.max(0, Math.round(positionMs));
     this.lastUpdateMono = performance.now();
-    await this.player.seek(this.lastPositionMs).catch(() => {});
+    if (this.trackStarted) await this.player?.seek(this.lastPositionMs).catch(() => {});
   }
 
   async getPosition() {
-    if (this.player && typeof this.player.getCurrentState === 'function') {
+    if (this.trackStarted && this.player) {
       const st = await this.player.getCurrentState().catch(() => null);
-      if (st) {
+      if (st?.track_window?.current_track?.uri === this.currentUri) {
         this.lastPositionMs = st.position || 0;
         this.lastUpdateMono = performance.now();
         return this.lastPositionMs;
@@ -301,7 +322,7 @@ export class SpotifyPlayer extends BasePlayer {
 
   // The Spotify URI actually loaded right now (B1 drift-loop guard).
   async getLoadedVideoId() {
-    return this.currentUri || null;
+    return this.trackStarted ? this.currentUri : null;
   }
 
   async getState() {
@@ -346,6 +367,7 @@ export class SpotifyPlayer extends BasePlayer {
     this.deviceId = null;
     this.isReady = false;
     this.currentUri = null;
+    this.trackStarted = false;
     this.lastDurationMs = 0;
   }
 }

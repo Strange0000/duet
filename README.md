@@ -25,7 +25,7 @@ npm install
 cd server
 cp .env.example .env
 ```
-Add `YOUTUBE_API_KEY` in `server/.env` if you want live YouTube Data API v3 search on the backend. Basic rooms, YouTube playback of preloaded tracks, and Audio Only work without any API keys.
+Add `YOUTUBE_API_KEY` in `server/.env` if you want live YouTube Data API v3 search on the backend. Basic rooms and YouTube playback of preloaded tracks work without any API keys. Audio Only uses Spotify Premium and requires Spotify setup.
 
 ### 3. Start Backend & Frontend (Two Terminals)
 **Terminal 1 — Backend (`http://localhost:3001`)**
@@ -52,7 +52,7 @@ npm run build
 2. Copy the 6-character code or `/room/<code>` invite link.
 3. Open the invite link in an Incognito window or second device.
 4. On the guest browser, tap **Tap to Join Audio** to satisfy mobile autoplay policies.
-5. Use **Audio Only** for deterministic local sync testing, or **YouTube** for official YouTube IFrame playback.
+5. Use **Audio Only** for full tracks from Spotify Premium, or **YouTube** for video playback.
 
 ## Known Limitations
 - **Spotify** is enabled by default (`ENABLE_SPOTIFY=true`). Each listener connects their own Spotify Premium account via OAuth PKCE; see [PROVIDER_LIMITATIONS.md](PROVIDER_LIMITATIONS.md). Set `ENABLE_SPOTIFY=false` to disable it.

@@ -41,15 +41,22 @@ export class LocalAudioPlayer extends BasePlayer {
         this.gainNode.connect(this.audioCtx.destination);
       }
     }
-    if (this.audioCtx && this.audioCtx.state === 'suspended') {
-      try {
-        await this.audioCtx.resume();
-      } catch {
-        // Requires user gesture
-      }
-    }
     this.state = 'ready';
     this.callbacks.onReady?.();
+  }
+
+  needsAudioGesture() {
+    return this.audioCtx?.state === 'suspended';
+  }
+
+  async unlockAudio() {
+    if (!this.needsAudioGesture()) return true;
+    try {
+      await this.audioCtx.resume();
+      return !this.needsAudioGesture();
+    } catch {
+      return false;
+    }
   }
 
   _playStepTone() {
@@ -104,23 +111,23 @@ export class LocalAudioPlayer extends BasePlayer {
     }
   }
 
-  async loadTrack(track, startPositionMs = 0, _shouldPlay = false) {
+  setDuration(durationMs) {
+    this.durationMs = Math.max(1000, Math.round(durationMs));
+  }
+
+  async loadTrack(track, startPositionMs = 0, shouldPlay = false) {
+    this._stopLoop();
     this.track = track;
-    this.durationMs = Math.max(1000, Math.round((track?.durationSec || 180) * 1000));
+    this.setDuration((track?.durationSec || 180) * 1000);
     this.anchorPositionMs = Math.max(0, Math.min(this.durationMs, startPositionMs));
     this.anchorMonoMs = performance.now();
     this.state = 'paused';
     this.callbacks.onReady?.();
+    if (shouldPlay) await this.play();
+    else this.callbacks.onStateChange?.('paused');
   }
 
   async play() {
-    if (this.audioCtx && this.audioCtx.state === 'suspended') {
-      try {
-        await this.audioCtx.resume();
-      } catch {
-        // Ignore if gesture not yet unlocked
-      }
-    }
     this.anchorMonoMs = performance.now();
     this.state = 'playing';
     this._startLoop();

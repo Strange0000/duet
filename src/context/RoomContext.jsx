@@ -80,7 +80,7 @@ function clearSession() {
 // guard and for deciding whether a real duration is safe to report (R5).
 function expectedMediaId(track, source) {
   if (!track) return null;
-  if (source === 'spotify') return track.spotifyUri || null;
+  if (source === 'spotify' || source === 'audio') return track.spotifyUri || null;
   if (source === 'local') return track.id || null;
   return track.youtubeId || null;
 }
@@ -133,6 +133,7 @@ export function RoomProvider({ children }) {
 
   const clockSyncRef = useRef(new ClockSync());
   const playerRef = useRef(null);
+  const playerInitVersionRef = useRef(0);
   const playerContainerRef = useRef(null);
   const lastCorrectionAtRef = useRef(0);
   const consecutiveDriftRef = useRef(0);
@@ -389,6 +390,9 @@ export function RoomProvider({ children }) {
       const player = playerRef.current;
       if (!player || !playback || !track) return;
 
+      const isLocalAudio = player instanceof LocalAudioPlayer;
+      if (isLocalAudio && playback.durationMs > 0) player.setDuration(playback.durationMs);
+
       const trackKey = `${track.id}:${playback.trackVersion}`;
       const signature = computePlaybackSignature(track, playback);
       // R1 (follow-up): the same playback command re-broadcast? room:state
@@ -448,6 +452,7 @@ export function RoomProvider({ children }) {
       const armStallWatchdog = (anchorMs) => {
         const check = async () => {
           playWatchdogTimerRef.current = null;
+          if (playerRef.current !== player) return;
           const p = playerRef.current;
           const st = roomStateRef.current;
           if (!p || !st?.playback || st.playback.playbackState !== 'playing') return;
@@ -503,13 +508,20 @@ export function RoomProvider({ children }) {
         }));
         // B1: pass shouldPlay so YouTube uses loadVideoById (loads AND plays)
         // instead of cueVideoById (loads paused, losing the immediate play()).
-        await player.loadTrack(track, expectedMs, playback.playbackState === 'playing');
+        const requiresUnlock = isLocalAudio || player instanceof SpotifyPlayer;
+        const shouldPlay = playback.playbackState === 'playing' && (!requiresUnlock || audioUnlockedRef.current);
+        const trackToLoad = isLocalAudio && playback.durationMs > 0
+          ? { ...track, durationSec: playback.durationMs / 1000 }
+          : track;
+        await player.loadTrack(trackToLoad, expectedMs, shouldPlay);
         // R5: do NOT report the real duration here — loadTrack returns
         // before the new video finishes loading, so getDuration() still
         // returns the PREVIOUS track's length and would corrupt the new
         // track's duration server-side. The 1s drift loop reports it once
         // the player is confirmed to be on the new track.
-        if (playback.playbackState === 'playing') armStallWatchdog(expectedMs);
+        if (shouldPlay && await player.getState() !== 'error' && playerRef.current === player) {
+          armStallWatchdog(expectedMs);
+        }
         // B1 (follow-up): loadVideoById is asynchronous — the new video has
         // NOT finished loading when loadTrack returns. The seek/play sync
         // below would therefore operate on the OLD video still loaded in the
@@ -521,7 +533,7 @@ export function RoomProvider({ children }) {
         return;
       }
 
-      if (!audioUnlockedRef.current) return;
+      if (!audioUnlockedRef.current || playerRef.current !== player) return;
 
       backgroundAudio.updateMetadata(track);
       await backgroundAudio.setPlaying(playback.playbackState === 'playing');
@@ -535,9 +547,10 @@ export function RoomProvider({ children }) {
         if (delayMs > 20 && delayMs < 3000) {
           scheduledPlayTimerRef.current = setTimeout(async () => {
             scheduledPlayTimerRef.current = null;
+            if (playerRef.current !== player) return;
             await player.seek(playback.anchorPositionMs || 0);
             await player.play();
-            armStallWatchdog(playback.anchorPositionMs || 0);
+            if (await player.getState() !== 'error') armStallWatchdog(playback.anchorPositionMs || 0);
           }, delayMs);
         } else {
           const currentPos = await player.getPosition();
@@ -546,7 +559,7 @@ export function RoomProvider({ children }) {
           }
           await player.play();
           // R1: the first Play after a cue is the stall case — watch it.
-          armStallWatchdog(expectedMs);
+          if (await player.getState() !== 'error') armStallWatchdog(expectedMs);
         }
       } else {
         await player.pause();
@@ -583,41 +596,30 @@ export function RoomProvider({ children }) {
   // Initialize / switch player adapter when source or container changes
   const initPlayerForSource = useCallback(
     async (source, containerEl) => {
-      const wantsYouTube = source === 'youtube' || source === 'audio';
-
-      // Seamless switch between YouTube (video) and Audio Only without interrupting playback
-      if (
-        wantsYouTube &&
-        playerRef.current instanceof YouTubePlayer &&
-        containerEl &&
-        playerRef.current.containerEl === containerEl
-      ) {
-        // Small fix (Audio Only status): the same initialized player is
-        // kept, so no onReady fires — but updateParticipant set ready=false
-        // when the source changed, and nothing set it back. The pill then
-        // read "Waiting for partner" on both tabs while playing. The player
-        // IS ready (same instance), so re-emit it here.
-        if (sessionRef.current) {
-          emitAck('player:ready', { ready: true }).catch(() => {});
-        }
-        return;
+      const wantsYouTube = source === 'youtube';
+      const version = ++playerInitVersionRef.current;
+      const isCurrent = () => version === playerInitVersionRef.current;
+      playerContainerRef.current = containerEl;
+      const previousPlayer = playerRef.current;
+      playerRef.current = null;
+      loadedTrackKeyRef.current = null;
+      lastAppliedPlaybackRef.current = null;
+      for (const timer of [scheduledPlayTimerRef, playWatchdogTimerRef]) {
+        clearTimeout(timer.current);
+        timer.current = null;
       }
-
-      if (playerRef.current) {
-        await playerRef.current.destroy();
-        playerRef.current = null;
-        loadedTrackKeyRef.current = null;
-        // R1 (follow-up): a new player instance has nothing applied yet.
-        lastAppliedPlaybackRef.current = null;
-      }
+      if (previousPlayer) await previousPlayer.destroy();
+      if (!isCurrent() || (wantsYouTube && !containerEl)) return;
 
       const callbacks = {
         onReady: () => {
+          if (!isCurrent()) return;
           if (sessionRef.current) {
             emitAck('player:ready', { ready: true }).catch(() => {});
           }
         },
         onStateChange: (state) => {
+          if (!isCurrent()) return;
           // R4: the local player is the ground truth for the status pill /
           // Play button — record it here (and in the 1s poll) instead of
           // relying on the server's lagging buffering/paused flags.
@@ -645,6 +647,7 @@ export function RoomProvider({ children }) {
           ) {
             // Keep audio playing when the mobile browser is minimized or backgrounded
             setTimeout(() => {
+              if (!isCurrent()) return;
               // N-33: re-check hidden INSIDE the timeout — if the tab is still
               // hidden, do not retry (otherwise this loops while backgrounded).
               if (typeof document !== 'undefined' && document.hidden) return;
@@ -658,6 +661,7 @@ export function RoomProvider({ children }) {
           }
         },
         onEnded: () => {
+          if (!isCurrent()) return;
           const st = roomStateRef.current;
           if (sessionRef.current && st?.playback) {
             emitAck('player:status', {
@@ -666,6 +670,7 @@ export function RoomProvider({ children }) {
           }
         },
         onError: (err) => {
+          if (!isCurrent()) return;
           setPlayerError(err);
           // F1: a failed load must not stay "already applied" in the dedup:
           // the next effect run has to re-issue the load (on a recovered
@@ -687,15 +692,21 @@ export function RoomProvider({ children }) {
 
       const adapter = wantsYouTube
         ? new YouTubePlayer(callbacks)
-        : source === 'spotify'
+        : source === 'spotify' || source === 'audio'
           ? new SpotifyPlayer(callbacks)
           : new LocalAudioPlayer(callbacks);
 
-      if (wantsYouTube && !containerEl) return;
-
       try {
         await adapter.initialize(containerEl);
+        if (!isCurrent()) {
+          await adapter.destroy();
+          return;
+        }
         playerRef.current = adapter;
+        if (adapter instanceof SpotifyPlayer || (adapter instanceof LocalAudioPlayer && adapter.needsAudioGesture())) {
+          audioUnlockedRef.current = false;
+          setAudioUnlocked(false);
+        }
         // M3: apply the stored volume/muted state to the new player.
         try {
           await adapter.setVolume?.(volumeRef.current);
@@ -703,6 +714,7 @@ export function RoomProvider({ children }) {
         } catch {
           // Ignore — volume can be re-applied later via setVolume/toggleMute
         }
+        if (!isCurrent()) return;
         setPlayerError(null);
 
         const st = roomStateRef.current;
@@ -713,7 +725,8 @@ export function RoomProvider({ children }) {
           await applyPlaybackToPlayer(st.playback, trk);
         }
       } catch (err) {
-        setPlayerError({ code: 'INIT_FAILED', message: err.message });
+        if (playerRef.current !== adapter) await adapter.destroy();
+        if (isCurrent()) setPlayerError({ code: 'INIT_FAILED', message: err.message });
       }
     },
     [applyPlaybackToPlayer]
@@ -1129,7 +1142,7 @@ export function RoomProvider({ children }) {
       } catch {
         realDurationMs = 0;
       }
-      if (realDurationMs > 0) {
+      if (realDurationMs > 0 && !(player instanceof LocalAudioPlayer)) {
         // Round 4 (a): only report once the player has actually started
         // this track — an errored player's getDuration() returns the
         // failed video's YouTube length, which would corrupt the queue
@@ -1406,6 +1419,7 @@ export function RoomProvider({ children }) {
   }, [runClockSync, seedPositionFromPlayback, refreshRoomStateFromServer]);
 
   const leaveRoom = useCallback(async () => {
+    playerInitVersionRef.current += 1;
     try {
       await emitAck('room:leave', {});
     } catch {
@@ -1431,17 +1445,26 @@ export function RoomProvider({ children }) {
   const unlockAudio = useCallback(async () => {
     setAudioUnlocked(true);
     audioUnlockedRef.current = true;
-    await backgroundAudio.unlock();
     const player = playerRef.current;
-    if (player && typeof player.initialize === 'function' && myParticipant?.source === 'local') {
-      await player.initialize();
+    if (player instanceof LocalAudioPlayer) {
+      const [unlocked] = await Promise.all([player.unlockAudio(), backgroundAudio.unlock()]);
+      if (!unlocked && playerRef.current === player) {
+        audioUnlockedRef.current = false;
+        setAudioUnlocked(false);
+        return;
+      }
+    } else {
+      await Promise.all([
+        player instanceof SpotifyPlayer ? player.unlockAudio() : undefined,
+        backgroundAudio.unlock(),
+      ]);
     }
     await emitAck('player:ready', { ready: true }).catch(() => {});
     const st = roomStateRef.current;
     if (st?.playback && currentTrack) {
       await applyPlaybackToPlayer(st.playback, currentTrack);
     }
-  }, [applyPlaybackToPlayer, currentTrack, myParticipant?.source]);
+  }, [applyPlaybackToPlayer, currentTrack]);
 
   // Round 4: full in-app player reset — what a page reload does, without
   // reloading the page. Called by the error banner's "Reload player"
@@ -1469,8 +1492,6 @@ export function RoomProvider({ children }) {
           st?.participants?.find((p) => sessionRef.current && p.id === sessionRef.current.participantId)?.source ||
           myParticipant?.source ||
           'youtube';
-        await player.destroy();
-        playerRef.current = null;
         await initPlayerForSource(source, playerContainerRef.current);
         ok = true;
       }
