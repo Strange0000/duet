@@ -251,6 +251,41 @@ describe('RoomView renders a real room', () => {
     }
   });
 
+  it('lets a guest choose and persist their room color mode independently of the theme', () => {
+    const ctx = makeCtx({ session: { participantId: 'guest-1', role: 'guest' } });
+    ctx.roomState.settings.theme = 'ocean';
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    const room = (key) => (
+      <RoomContext.Provider value={ctx}>
+        <RoomView key={key} appearance="dark" onLeave={() => {}} />
+      </RoomContext.Provider>
+    );
+    localStorage.removeItem('duet_room_appearance');
+
+    try {
+      act(() => root.render(room('first')));
+      act(() => container.querySelector('[aria-label="Room settings"]').click());
+      const mode = container.querySelector('[aria-label="Room color mode"]');
+      const [light, dark] = mode.querySelectorAll('button');
+      expect(dark.getAttribute('aria-pressed')).toBe('true');
+      act(() => light.click());
+      expect(light.getAttribute('aria-pressed')).toBe('true');
+      expect(container.querySelector('.duet-room').dataset.appearance).toBe('light');
+      expect(container.querySelector('.room-ambient').dataset.theme).toBe('ocean');
+      expect(localStorage.getItem('duet_room_appearance')).toBe('light');
+      expect(ctx.sendCommand).not.toHaveBeenCalled();
+
+      act(() => root.render(room('second')));
+      expect(container.querySelector('.duet-room').dataset.appearance).toBe('light');
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+      localStorage.removeItem('duet_room_appearance');
+    }
+  });
+
   it('toggles the glass appearance independently of room settings and persists it', () => {
     const ctx = makeCtx();
     const container = document.createElement('div');

@@ -15,6 +15,7 @@ import {
   ListMusic,
   Lock,
   MessageCircle,
+  Moon,
   Palette,
   Pause,
   Play,
@@ -29,6 +30,7 @@ import {
   SkipBack,
   SkipForward,
   Smartphone,
+  Sun,
   Loader2,
   Trash2,
   Users,
@@ -51,7 +53,7 @@ import ThemeBackground, { THEME_CONFIG } from './ThemeBackground';
 import './RoomView.css';
 import './RoomDesktop.css';
 import './RoomGlass.css';
-import { getGlassAppearance, getHomeTheme, GLASS_APPEARANCE_KEY } from '../utils/appearance';
+import { getGlassAppearance, getHomeTheme, getRoomAppearance, GLASS_APPEARANCE_KEY, ROOM_APPEARANCE_KEY } from '../utils/appearance';
 
 const THEME_STYLES = THEME_CONFIG;
 
@@ -318,6 +320,16 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
   const [searchError, setSearchError] = useState('');
   const [chatText, setChatText] = useState('');
   const [showSettings, setShowSettings] = useState(false);
+  const [roomAppearance, setRoomAppearance] = useState(getRoomAppearance);
+  const activeAppearance = roomAppearance ?? appearance;
+  const chooseRoomAppearance = (mode) => {
+    setRoomAppearance(mode);
+    try {
+      localStorage.setItem(ROOM_APPEARANCE_KEY, mode);
+    } catch {
+      // The setting still applies for this visit.
+    }
+  };
   const [glass, setGlass] = useState(getGlassAppearance);
   const toggleGlass = (enabled) => {
     setGlass(enabled);
@@ -1126,7 +1138,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
     <div
       className="duet-room relative min-h-screen overflow-x-hidden"
       data-compact={isMobileLayout}
-      data-appearance={appearance}
+      data-appearance={activeAppearance}
       data-glass={glass ? 'on' : 'off'}
       style={{
         '--room-accent': themeConfig.accent,
@@ -1542,6 +1554,14 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
               <section className="room-settings-section" aria-labelledby="room-appearance-settings">
                 <h2 id="room-appearance-settings">Appearance and session</h2>
                 <div className="room-settings-group">
+                  <div className="room-settings-group room-color-mode" role="group" aria-label="Room color mode">
+                    <button type="button" className="room-button" aria-pressed={activeAppearance === 'light'} onClick={() => chooseRoomAppearance('light')}>
+                      <Sun size={15} aria-hidden="true" /> Light
+                    </button>
+                    <button type="button" className="room-button" aria-pressed={activeAppearance === 'dark'} onClick={() => chooseRoomAppearance('dark')}>
+                      <Moon size={15} aria-hidden="true" /> Dark
+                    </button>
+                  </div>
                   <RoomSwitch checked={glass} onChange={toggleGlass} className="room-glass-toggle">
                     <Layers2 size={15} aria-hidden="true" /> Glass appearance
                   </RoomSwitch>

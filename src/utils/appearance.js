@@ -19,3 +19,14 @@ export function getGlassAppearance() {
     return false;
   }
 }
+
+export const ROOM_APPEARANCE_KEY = 'duet_room_appearance';
+
+export function getRoomAppearance() {
+  try {
+    const saved = localStorage.getItem(ROOM_APPEARANCE_KEY);
+    return saved === 'light' || saved === 'dark' ? saved : null;
+  } catch {
+    return null;
+  }
+}
