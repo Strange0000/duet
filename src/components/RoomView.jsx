@@ -46,6 +46,7 @@ import { canUseSpotify, getStoredSpotifyAuth } from '../utils/spotifyAuth';
 import AudioVisualizerCanvas from './AudioVisualizerCanvas';
 import SpotifyConnectModal from './SpotifyConnectModal';
 import RoomLobby from './RoomLobby';
+import RoomSwitch from './RoomSwitch';
 import ThemeBackground, { THEME_CONFIG } from './ThemeBackground';
 import './RoomView.css';
 import './RoomDesktop.css';
@@ -95,6 +96,51 @@ function InviteDialog({ invite, onClose }) {
       </div>
       <label htmlFor="room-share-url">Invite link</label>
       <input id="room-share-url" type="url" readOnly value={invite.url} onFocus={(event) => event.currentTarget.select()} />
+    </dialog>
+  );
+}
+
+function TransferHostDialog({ participant, onClose, onConfirm }) {
+  const dialogRef = useRef(null);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (typeof dialog.showModal === 'function') dialog.showModal();
+    else dialog.setAttribute('open', '');
+  }, []);
+
+  const confirm = async () => {
+    if (pending) return;
+    setPending(true);
+    setError('');
+    try {
+      await onConfirm();
+      onClose();
+    } catch (failure) {
+      setError(failure.message);
+      setPending(false);
+    }
+  };
+
+  return (
+    <dialog
+      ref={dialogRef}
+      className="room-share-dialog room-transfer-dialog"
+      aria-labelledby="room-transfer-title"
+      onClose={onClose}
+      onCancel={(event) => { if (pending) event.preventDefault(); }}
+    >
+      <h2 id="room-transfer-title">Make {participant.name} host?</h2>
+      <p>They’ll control room settings and playback. You’ll stay in the room as a guest.</p>
+      {error && <p role="alert" className="room-transfer-error">{error}</p>}
+      <div className="room-transfer-actions">
+        <button type="button" className="room-button" autoFocus disabled={pending} onClick={onClose}>Cancel</button>
+        <button type="button" className="room-button" data-tone="primary" disabled={pending} onClick={confirm}>
+          {pending ? 'Transferring…' : 'Make host'}
+        </button>
+      </div>
     </dialog>
   );
 }
@@ -222,10 +268,10 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
   const [chatText, setChatText] = useState('');
   const [showSettings, setShowSettings] = useState(false);
   const [glass, setGlass] = useState(getGlassAppearance);
-  const toggleGlass = () => {
-    setGlass(!glass);
+  const toggleGlass = (enabled) => {
+    setGlass(enabled);
     try {
-      localStorage.setItem(GLASS_APPEARANCE_KEY, glass ? 'off' : 'on');
+      localStorage.setItem(GLASS_APPEARANCE_KEY, enabled ? 'on' : 'off');
     } catch {
       // The setting still applies for this visit.
     }
@@ -259,7 +305,8 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
   // drag immediately while the server seek is debounced (see handleSeek).
   const [scrubSec, setScrubSec] = useState(null);
   const [playLoading, setPlayLoading] = useState(false);
-  const [armedAction, setArmedAction] = useState(null); // N-24: 'end' | 'host'
+  const [armedAction, setArmedAction] = useState(null);
+  const [transferTargetId, setTransferTargetId] = useState(null);
   // M3: volume falls back to local state until the context exposes it.
   const [localVolume, setLocalVolume] = useState(0.8);
   const [localMuted, setLocalMuted] = useState(false);
@@ -976,6 +1023,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
       role: isHost ? 'guest' : 'host',
       source: demoPartnerSource,
       connected: true,
+      canTransferHost: isHost,
       detail: `${isHost ? 'Following' : 'Leading'} at ${formatTime(currentSec)}`,
     });
   } else {
@@ -988,10 +1036,28 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
       lobbyParticipants.push({
         ...participant,
         connected,
+        canTransferHost: participant.connected && participant.role === 'guest',
         detail: connected ? `${participant.ready ? 'Ready' : 'Loading'}${position}` : null,
       });
     }
   }
+
+  const transferTarget = isHost
+    ? lobbyParticipants.find((participant) => participant.id === transferTargetId && participant.canTransferHost)
+    : null;
+
+  const transferHost = async () => {
+    if (!transferTarget) throw new Error('This listener is no longer available.');
+    if (isDemo) {
+      setDemoRole('guest');
+      return;
+    }
+    const response = await sendCommand('room:transfer-host', { targetParticipantId: transferTarget.id });
+    const newHost = response?.state?.participants.find((participant) => participant.id === transferTarget.id);
+    if (!response?.ok || newHost?.role !== 'host') {
+      throw new Error(response?.error || 'The room changed. Try selecting the listener again.');
+    }
+  };
 
   const progressPct = durationKnown ? Math.min(100, (displaySec / durationSec) * 100) : 0;
 
@@ -1012,6 +1078,13 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
       {/* Theme Living Ambient Stage */}
       <ThemeBackground theme={theme} />
       {shareInvite && <InviteDialog invite={shareInvite} onClose={() => setShareInvite(null)} />}
+      {transferTarget && (
+        <TransferHostDialog
+          participant={transferTarget}
+          onClose={() => setTransferTargetId(null)}
+          onConfirm={transferHost}
+        />
+      )}
       {/* Spotify Connect Modal */}
       <SpotifyConnectModal
         open={showSpotifyModal}
@@ -1418,88 +1491,42 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
           </div>
         )}
 
-        {/* Settings drawer — toggled by Settings gear icon */}
         {showSettings && (
-          <div className="room-settings border-t border-white/5 bg-zinc-950/70 px-4 py-2 sm:px-8">
-            <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-x-4 gap-y-2">
-              {/* Settings checkboxes + actions */}
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
-                {!isDemo && canControl && (
-                  <>
-                    <label className="flex items-center gap-1.5 text-[11px] text-zinc-400 cursor-pointer select-none hover:text-zinc-200 transition">
-                      <input
-                        type="checkbox"
-                        checked={Boolean(roomState?.settings?.allowGuestQueue)}
-                        onChange={(e) =>
-                          sendCommand('room:settings', { allowGuestQueue: e.target.checked })
-                        }
-                        className="accent-violet-500 h-3.5 w-3.5"
-                      />
-                      Allow guest to add songs
-                    </label>
-                    <label className="flex items-center gap-1.5 text-[11px] text-zinc-400 cursor-pointer select-none hover:text-zinc-200 transition">
-                      <input
-                        type="checkbox"
-                        checked={Boolean(roomState?.settings?.allowGuestControl)}
-                        onChange={(e) =>
-                          sendCommand('room:settings', { allowGuestControl: e.target.checked })
-                        }
-                        className="accent-violet-500 h-3.5 w-3.5"
-                      />
-                      Allow guest full control
-                    </label>
-                    <label className="flex items-center gap-1.5 text-[11px] text-zinc-400 cursor-pointer select-none hover:text-zinc-200 transition">
-                      <input
-                        type="checkbox"
-                        checked={Boolean(roomState?.settings?.requireApproval)}
-                        onChange={(e) =>
-                          sendCommand('room:settings', { requireApproval: e.target.checked })
-                        }
-                        className="accent-violet-500 h-3.5 w-3.5"
-                      />
-                      Require approval to join
-                    </label>
-                  </>
-                )}
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <button type="button" className="room-glass-toggle" aria-pressed={glass} onClick={toggleGlass}>
-                  <Layers2 size={15} aria-hidden="true" />
-                  Glass appearance
-                  <span aria-hidden="true" className="room-glass-switch" />
+          <div className="room-settings">
+            <div className="room-settings-inner">
+              {!isDemo && canControl && (
+                <div className="room-settings-group">
+                  {[
+                    ['allowGuestQueue', 'Allow guest to add songs'],
+                    ['allowGuestControl', 'Allow guest full control'],
+                    ['requireApproval', 'Require approval to join'],
+                  ].map(([setting, label]) => (
+                    <RoomSwitch
+                      key={setting}
+                      checked={Boolean(roomState?.settings?.[setting])}
+                      onChange={(enabled) => sendCommand('room:settings', { [setting]: enabled })}
+                    >
+                      {label}
+                    </RoomSwitch>
+                  ))}
+                </div>
+              )}
+              <div className="room-settings-group">
+                <RoomSwitch checked={glass} onChange={toggleGlass} className="room-glass-toggle">
+                  <Layers2 size={15} aria-hidden="true" /> Glass appearance
+                </RoomSwitch>
+                <button type="button" onClick={() => setShowPrivacy(true)} className="room-button">
+                  <Shield size={15} aria-hidden="true" /> Privacy
                 </button>
-                <button
-                  onClick={() => setShowPrivacy(true)}
-                  className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/5 px-2.5 py-0.5 text-[11px] font-semibold text-zinc-400 hover:bg-white/10 hover:text-white cursor-pointer transition"
-                >
-                  <Shield className="h-3 w-3" /> Privacy
-                </button>
-                {!isDemo && isHost && partnerParticipant && (
-                  <button
-                    onClick={() =>
-                      armOrRun('host', () =>
-                        sendCommand('room:transfer-host', {
-                          targetParticipantId: partnerParticipant.id,
-                        })
-                      )
-                    }
-                    className={`rounded-full border px-2.5 py-0.5 text-[11px] font-semibold cursor-pointer transition ${
-                      armedAction === 'host'
-                        ? 'border-amber-500/50 bg-amber-500/20 text-amber-200'
-                        : 'border-white/10 bg-white/5 text-zinc-400 hover:bg-white/10 hover:text-white'
-                    }`}
-                  >
-                    {armedAction === 'host' ? 'Tap again to make host' : `Make ${partnerParticipant.name} Host`}
-                  </button>
-                )}
                 {!isDemo && isHost && (
                   <button
+                    type="button"
                     onClick={() => armOrRun('end', () => sendCommand('room:close', {}))}
-                    className={`rounded-full px-3 py-1 text-[11px] font-bold text-white cursor-pointer transition ${
-                      armedAction === 'end' ? 'bg-rose-600 hover:bg-rose-700' : 'bg-emerald-600 hover:bg-emerald-700'
-                    }`}
+                    className="room-button"
+                    data-tone="danger"
+                    data-armed={armedAction === 'end'}
                   >
-                    {armedAction === 'end' ? 'Tap again to end room' : 'End Room'}
+                    {armedAction === 'end' ? 'Tap again to end room' : 'End room'}
                   </button>
                 )}
               </div>
@@ -1746,7 +1773,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
               {pendingJoins.length > 0 && (
                 <button
                   type="button"
-                  className="room-lobby-notice"
+                  className="room-button room-lobby-notice"
                   onClick={() => navigateRoom('lobby')}
                 >
                   <Users size={17} aria-hidden="true" />
@@ -1889,7 +1916,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                 <div className="flex justify-end">
                   <button
                     onClick={handleResync}
-                    className="room-resync inline-flex items-center gap-1.5 text-xs font-semibold text-zinc-500 hover:text-white cursor-pointer"
+                    className="room-button room-resync inline-flex items-center gap-1.5 text-xs font-semibold text-zinc-500 hover:text-white cursor-pointer"
                   >
                     <RefreshCw className="h-3.5 w-3.5" /> Resync
                   </button>
@@ -2034,6 +2061,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                   participants={lobbyParticipants}
                   pendingJoins={pendingJoins}
                   canManage={canControl}
+                  onSelectHost={isHost ? setTransferTargetId : undefined}
                   approvalRequired={Boolean(roomState?.settings?.requireApproval)}
                   onApprovalChange={(requireApproval) => sendCommand('room:settings', { requireApproval })}
                   respondingToJoin={respondingToJoin}

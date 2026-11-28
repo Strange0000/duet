@@ -603,6 +603,10 @@ export class RoomStore {
       return { error: 'Target participant not found', code: 'TARGET_NOT_FOUND' };
     }
 
+    if (!target.connected) {
+      return { error: 'This listener is reconnecting. Try again when they’re connected.', code: 'TARGET_NOT_CONNECTED' };
+    }
+
     host.role = 'guest';
     target.role = 'host';
     this._bumpVersion(room, commandId);

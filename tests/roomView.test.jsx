@@ -228,7 +228,7 @@ describe('RoomView renders a real room', () => {
       act(() => container.querySelector('[aria-label="Room settings"]').click());
       const toggle = container.querySelector('.room-glass-toggle');
       act(() => toggle.click());
-      expect(toggle.getAttribute('aria-pressed')).toBe('true');
+      expect(toggle.getAttribute('aria-checked')).toBe('true');
       expect(container.querySelector('.duet-room').dataset.glass).toBe('on');
       expect(localStorage.getItem('duet_room_glass')).toBe('on');
       expect(ctx.sendCommand).not.toHaveBeenCalled();
@@ -236,6 +236,47 @@ describe('RoomView renders a real room', () => {
       act(() => root.unmount());
       container.remove();
       localStorage.removeItem('duet_room_glass');
+    }
+  });
+
+  it('transfers hosting to the avatar selected in the lobby', async () => {
+    const ctx = makeCtx();
+    const host = ctx.roomState.participants[0];
+    const guests = [
+      { ...host, id: 'guest-1', name: 'First guest', role: 'guest' },
+      { ...host, id: 'guest-2', name: 'Second guest', role: 'guest' },
+      { ...host, id: 'guest-3', name: 'Offline guest', role: 'guest', connected: false },
+    ];
+    ctx.roomState.participants.push(...guests);
+    ctx.partnerParticipant = guests[0];
+    ctx.sendCommand.mockResolvedValue({ ok: true, state: { participants: [{ ...guests[1], role: 'host' }] } });
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    document.body.appendChild(container);
+    const render = (value) => act(() => root.render(
+      <RoomContext.Provider value={value}>
+        <RoomView onLeave={() => {}} />
+      </RoomContext.Provider>
+    ));
+
+    try {
+      render(ctx);
+      const lobby = [...container.querySelectorAll('.room-desktop-tabs button')].find((button) => button.textContent === 'Lobby');
+      act(() => lobby.click());
+      expect(container.querySelector('[aria-label="Make Offline guest host"]')).toBeNull();
+      act(() => container.querySelector('[aria-label="Make Second guest host"]').click());
+      expect(container.querySelector('dialog[open]').textContent).toContain('Make Second guest host?');
+      expect(ctx.sendCommand).not.toHaveBeenCalled();
+
+      await act(async () => container.querySelector('dialog [data-tone="primary"]').click());
+      expect(ctx.sendCommand).toHaveBeenCalledWith('room:transfer-host', { targetParticipantId: 'guest-2' });
+      expect(container.querySelector('dialog[open]')).toBeNull();
+
+      render({ ...ctx, session: { ...ctx.session, role: 'guest' } });
+      expect(container.querySelectorAll('button.room-lobby-avatar')).toHaveLength(0);
+    } finally {
+      act(() => root.unmount());
+      container.remove();
     }
   });
 

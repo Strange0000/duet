@@ -142,3 +142,21 @@
 @keyframes room-theme-appear {
   from { opacity: 0; }
 }
+
+@media (prefers-reduced-transparency: no-preference) {
+  .duet-room[data-glass="on"] .room-ambient-image {
+    opacity: .96;
+  }
+
+  .duet-room[data-glass="on"] .room-ambient::after {
+    background: linear-gradient(180deg, transparent 43%, color-mix(in srgb, var(--room-canvas) 58%, transparent));
+  }
+
+  .duet-room[data-glass="on"][data-appearance="light"] .room-ambient-image {
+    opacity: .57;
+  }
+
+  .duet-room[data-glass="on"][data-appearance="light"] .room-ambient::after {
+    background: linear-gradient(180deg, transparent 43%, color-mix(in srgb, var(--room-paper) 67%, transparent));
+  }
+}

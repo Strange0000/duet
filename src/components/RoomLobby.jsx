@@ -1,5 +1,6 @@
 import React from 'react';
 import { Copy, Share2, UserRound } from 'lucide-react';
+import RoomSwitch from './RoomSwitch';
 
 const SOURCE_LABELS = {
   youtube: 'YouTube',
@@ -17,6 +18,7 @@ export default function RoomLobby({
   respondingToJoin,
   onRespondToJoin,
   onSwitchDemoSource,
+  onSelectHost,
   invite,
 }) {
   return (
@@ -28,15 +30,9 @@ export default function RoomLobby({
             <span role="status">{pendingJoins.length} waiting</span>
           </div>
           {canManage && (
-            <label className="room-lobby-approval">
-              <input
-                type="checkbox"
-                role="switch"
-                checked={approvalRequired}
-                onChange={(event) => onApprovalChange(event.target.checked)}
-              />
+            <RoomSwitch checked={approvalRequired} onChange={onApprovalChange} className="room-lobby-approval">
               Require approval to join
-            </label>
+            </RoomSwitch>
           )}
           {pendingJoins.length === 0 ? (
             <p className="room-lobby-muted">
@@ -82,7 +78,19 @@ export default function RoomLobby({
         <ul className="room-lobby-list">
           {participants.map((participant) => (
             <li key={participant.id} className="room-lobby-person">
-              <span className="room-lobby-avatar"><UserRound size={18} aria-hidden="true" /></span>
+              {onSelectHost && participant.canTransferHost ? (
+                <button
+                  type="button"
+                  className="room-button room-lobby-avatar"
+                  aria-label={`Make ${participant.name} host`}
+                  title={`Make ${participant.name} host`}
+                  onClick={() => onSelectHost(participant.id)}
+                >
+                  <UserRound size={18} aria-hidden="true" />
+                </button>
+              ) : (
+                <span className="room-lobby-avatar"><UserRound size={18} aria-hidden="true" /></span>
+              )}
               <div>
                 <p>{participant.name} {participant.isSelf && <span>(you)</span>}</p>
                 <span>
