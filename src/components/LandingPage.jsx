@@ -324,7 +324,7 @@ export default function LandingPage({
                         <span className="text-sm font-bold text-white">Audio Only</span>
                         {connectedSource === 'audio' && <span className="rounded-full bg-violet-500/20 px-2 py-0.5 text-[10px] font-bold text-violet-300">Active</span>}
                       </div>
-                      <p className="mt-0.5 text-xs text-zinc-500">Music without video • Background play</p>
+                      <p className="mt-0.5 text-xs text-zinc-500">Synced test tones without video</p>
                     </div>
                   </button>
 

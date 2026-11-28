@@ -13,6 +13,8 @@ import { RoomContext } from '../src/context/RoomContext.jsx';
 import RoomView from '../src/components/RoomView.jsx';
 import { INITIAL_TRACKS } from '../src/data/mockTracks.js';
 
+vi.mock('../src/components/AudioVisualizerCanvas.jsx', () => ({ default: () => null }));
+
 function makeRoomState() {
   return {
     roomCode: 'TEST01',
@@ -122,5 +124,36 @@ describe('RoomView renders a real room', () => {
     expect(container.textContent).toContain('Midnight City');
     act(() => root.unmount());
     container.remove();
+  });
+
+  it.each(['audio', 'local'])('omits the video mount for %s and restores it for YouTube', (source) => {
+    const ctx = makeCtx();
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    const renderSource = (nextSource) => {
+      act(() => root.render(
+        <RoomContext.Provider value={{
+          ...ctx,
+          myParticipant: { ...ctx.myParticipant, source: nextSource },
+        }}>
+          <RoomView onLeave={() => {}} />
+        </RoomContext.Provider>
+      ));
+    };
+
+    try {
+      renderSource(source);
+      expect(container.querySelector('.room-video')).toBeNull();
+      expect(ctx.initPlayerForSource).toHaveBeenLastCalledWith(source, null);
+      expect(container.textContent).toContain('Audio Only plays synced test tones.');
+
+      renderSource('youtube');
+      expect(container.querySelector('.room-video')).not.toBeNull();
+      expect(ctx.initPlayerForSource).toHaveBeenLastCalledWith('youtube', expect.any(HTMLElement));
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+    }
   });
 });

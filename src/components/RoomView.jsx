@@ -258,6 +258,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
   const mySource = isDemo ? demoSource : myParticipant?.source || 'youtube';
   const audioUnlocked = isDemo ? demoUnlocked : realAudioUnlocked;
   const currentTrack = isDemo ? demoQueue[demoIdx] || demoQueue[0] : realTrack;
+  const hasVideo = !isDemo && mySource === 'youtube' && Boolean(currentTrack);
   const queue = isDemo
     ? demoQueue.map((t, i) => ({ queueItemId: `demo-${i}`, track: t, addedByName: 'Demo' }))
     : roomState?.queue || [];
@@ -304,7 +305,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
   useEffect(() => {
     if (isDemo || !roomState) return;
     initPlayerForSource(mySource, ytContainerRef.current);
-  }, [isDemo, mySource, Boolean(roomState), initPlayerForSource]);
+  }, [isDemo, mySource, hasVideo, Boolean(roomState), initPlayerForSource]);
 
   // Clear unread chat count when opening chat tab
   useEffect(() => {
@@ -1679,6 +1680,12 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                 </div>
               </div>
 
+              {!isDemo && (mySource === 'audio' || mySource === 'local') && (
+                <p className="mb-3 text-xs leading-relaxed text-zinc-300">
+                  Audio Only plays synced test tones. Choose YouTube or Spotify to hear the original recording.
+                </p>
+              )}
+
               {pendingJoins.length > 0 && (
                 <button
                   type="button"
@@ -1693,15 +1700,8 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
               {/* Player Stage: Visible YouTube IFrame OR Audio-Only Visualizer */}
               {currentTrack && (
                 <div className="room-stage relative mt-6 space-y-5">
-                  {!isDemo && (mySource === 'youtube' || mySource === 'audio') && (
-                    <div
-                      aria-label={mySource === 'audio' ? `Audio Only — ${currentTrack.title} by ${currentTrack.artist}` : undefined}
-                      className={
-                        mySource === 'youtube'
-                          ? 'room-video overflow-hidden rounded-2xl border border-white/10 bg-black'
-                          : 'room-video pointer-events-none mx-auto min-h-[200px] w-full max-w-[360px] overflow-hidden rounded-2xl border border-white/10 bg-black'
-                      }
-                    >
+                  {hasVideo && (
+                    <div className="room-video overflow-hidden rounded-2xl border border-white/10 bg-black">
                       <div ref={ytContainerRef} className="aspect-video min-h-[200px] w-full" />
                     </div>
                   )}
@@ -1733,7 +1733,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                             : 'border-violet-500/30 bg-violet-500/15 text-violet-300'
                         }`}>
                           <Volume2 className="h-3 w-3" />{' '}
-                          {mySource === 'spotify' ? 'Spotify Premium · Synced' : 'Audio Only · Background Play'}
+                          {mySource === 'spotify' ? 'Spotify Premium · Synced' : 'Audio Only · Sync Test'}
                         </span>
                         <h2 className="room-track-title font-display text-2xl font-bold tracking-tight break-words text-white sm:text-3xl">
                           {currentTrack.title}
