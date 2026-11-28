@@ -126,6 +126,45 @@ describe('RoomView renders a real room', () => {
     container.remove();
   });
 
+  it('shows room stats and only leaves the room after confirmation', async () => {
+    const ctx = makeCtx();
+    ctx.roomState.stats.tracksPlayed = 4;
+    ctx.syncMetrics.correctionCount = 2;
+    const onLeave = vi.fn();
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    document.body.appendChild(container);
+
+    try {
+      act(() => root.render(
+        <RoomContext.Provider value={ctx}>
+          <RoomView onLeave={onLeave} />
+        </RoomContext.Provider>
+      ));
+
+      const openSummary = () => act(() => container.querySelector('[aria-label="Leave room"]').click());
+      const summary = () => container.querySelector('dialog[aria-labelledby="room-session-title"]');
+      openSummary();
+      expect(summary().open).toBe(true);
+      expect(summary().textContent).toContain('Room TEST01');
+      expect([...summary().querySelectorAll('.room-session-stats dd')].slice(1).map((stat) => stat.textContent))
+        .toEqual(['4', String(INITIAL_TRACKS.length), '2']);
+
+      act(() => summary().querySelector('button').click());
+      expect(summary()).toBeNull();
+      expect(ctx.leaveRoom).not.toHaveBeenCalled();
+
+      openSummary();
+      await act(async () => summary().querySelector('[data-tone="danger"]').click());
+      expect(summary()).toBeNull();
+      expect(ctx.leaveRoom).toHaveBeenCalledTimes(1);
+      expect(onLeave).toHaveBeenCalledTimes(1);
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+    }
+  });
+
   it('directs an iPhone guest to the native YouTube Play control', () => {
     const ctx = makeCtx({ audioUnlocked: false, session: { participantId: 'guest-1', role: 'guest' } });
     ctx.roomState.playback.playbackState = 'playing';

@@ -100,6 +100,57 @@ function InviteDialog({ invite, onClose }) {
   );
 }
 
+function SessionSummary({ roomCode, duration, tracksPlayed, queueSize, syncCorrections, onStay, onLeave }) {
+  const dialogRef = useRef(null);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (typeof dialog.showModal === 'function') dialog.showModal();
+    else dialog.setAttribute('open', '');
+  }, []);
+
+  return (
+    <dialog
+      ref={dialogRef}
+      className="room-share-dialog room-session-summary"
+      aria-labelledby="room-session-title"
+      onClose={onStay}
+    >
+      <header className="room-session-heading">
+        <span className="room-session-icon"><Clock size={22} aria-hidden="true" /></span>
+        <div>
+          <h2 id="room-session-title">Session Summary</h2>
+          <p>Room {roomCode}</p>
+        </div>
+      </header>
+      <dl className="room-session-stats">
+        <div className="room-session-duration">
+          <dt>Duration</dt>
+          <dd>{duration}</dd>
+        </div>
+        <div>
+          <dt>Tracks played</dt>
+          <dd>{tracksPlayed}</dd>
+        </div>
+        <div>
+          <dt>Songs in queue</dt>
+          <dd>{queueSize}</dd>
+        </div>
+        {syncCorrections != null && (
+          <div className="room-session-sync">
+            <dt>Sync corrections</dt>
+            <dd>{syncCorrections}</dd>
+          </div>
+        )}
+      </dl>
+      <footer className="room-session-actions">
+        <button className="room-button" type="button" onClick={onStay}>Stay</button>
+        <button className="room-button" data-tone="danger" type="button" onClick={onLeave}>Leave Room</button>
+      </footer>
+    </dialog>
+  );
+}
+
 function TransferHostDialog({ participant, onClose, onConfirm }) {
   const dialogRef = useRef(null);
   const [pending, setPending] = useState(false);
@@ -1107,53 +1158,16 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
         }}
       />
 
-      {/* Session Summary Modal */}
       {showSessionSummary && (
-        <div className="room-dialog fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm">
-          <div className="room-dialog-surface mx-4 w-full max-w-sm rounded-3xl border border-white/10 bg-zinc-900 p-6 shadow-2xl">
-            <div className="text-center">
-              <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-violet-600/20 text-violet-400">
-                <Clock className="h-6 w-6" />
-              </div>
-              <h3 className="mt-4 font-display text-xl font-bold text-white">Session Summary</h3>
-              <p className="mt-1 text-sm text-zinc-400">Room {roomCode}</p>
-            </div>
-            <div className="mt-5 space-y-3">
-              <div className="flex items-center justify-between rounded-2xl bg-white/5 px-4 py-3">
-                <span className="text-xs text-zinc-400">Duration</span>
-                <span className="font-mono text-sm font-bold text-white">{sessionDurationStr}</span>
-              </div>
-              <div className="flex items-center justify-between rounded-2xl bg-white/5 px-4 py-3">
-                <span className="text-xs text-zinc-400">Tracks Played</span>
-                <span className="font-mono text-sm font-bold text-white">{tracksPlayedCount}</span>
-              </div>
-              <div className="flex items-center justify-between rounded-2xl bg-white/5 px-4 py-3">
-                <span className="text-xs text-zinc-400">Queue Size</span>
-                <span className="font-mono text-sm font-bold text-white">{queue.length} songs</span>
-              </div>
-              {!isDemo && (
-                <div className="flex items-center justify-between rounded-2xl bg-white/5 px-4 py-3">
-                  <span className="text-xs text-zinc-400">Sync Corrections</span>
-                  <span className="font-mono text-sm font-bold text-white">{syncMetrics.correctionCount}</span>
-                </div>
-              )}
-            </div>
-            <div className="mt-6 flex gap-3">
-              <button
-                onClick={() => setShowSessionSummary(false)}
-                className="flex-1 rounded-full border border-white/10 bg-white/5 py-2.5 text-xs font-semibold text-zinc-300 hover:bg-white/10 cursor-pointer"
-              >
-                Stay
-              </button>
-              <button
-                onClick={confirmLeave}
-                className="flex-1 rounded-full bg-rose-600 py-2.5 text-xs font-semibold text-white hover:bg-rose-700 cursor-pointer"
-              >
-                Leave Room
-              </button>
-            </div>
-          </div>
-        </div>
+        <SessionSummary
+          roomCode={roomCode}
+          duration={sessionDurationStr}
+          tracksPlayed={tracksPlayedCount}
+          queueSize={queue.length}
+          syncCorrections={isDemo ? undefined : syncMetrics.correctionCount}
+          onStay={() => setShowSessionSummary(false)}
+          onLeave={confirmLeave}
+        />
       )}
 
       {/* Privacy Notice Modal */}
