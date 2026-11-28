@@ -39,15 +39,9 @@ import { resolveYouTubeTrack, searchRealSongs } from '../utils/artworkApi';
 import { getStoredSpotifyAuth } from '../utils/spotifyAuth';
 import AudioVisualizerCanvas from './AudioVisualizerCanvas';
 import SpotifyConnectModal from './SpotifyConnectModal';
+import ThemeBackground, { THEME_CONFIG } from './ThemeBackground';
 
-const THEME_STYLES = {
-  midnight: { bg: 'bg-zinc-950', accent: '#7c3aed', image: '/themes/midnight-bg.jpg', anim: 'animate-midnight', tint: 'from-indigo-950/40 via-zinc-950/55 to-zinc-950/90' },
-  aurora: { bg: 'bg-gradient-to-b from-slate-950 via-emerald-950/40 to-zinc-950', accent: '#10b981', image: '/themes/aurora-bg.jpg', anim: 'animate-aurora', tint: 'from-emerald-950/35 via-slate-950/50 to-zinc-950/90' },
-  sunset: { bg: 'bg-gradient-to-b from-zinc-950 via-rose-950/40 to-zinc-950', accent: '#f97316', image: '/themes/sunset-bg.jpg', anim: 'animate-sunset', tint: 'from-orange-950/35 via-rose-950/45 to-zinc-950/90' },
-  rose: { bg: 'bg-gradient-to-b from-zinc-950 via-pink-950/35 to-zinc-950', accent: '#ec4899', image: '/themes/rose-bg.jpg', anim: 'animate-rose', tint: 'from-pink-950/35 via-zinc-950/50 to-zinc-950/90' },
-  ocean: { bg: 'bg-gradient-to-b from-slate-950 via-sky-950/40 to-zinc-950', accent: '#0ea5e9', image: '/themes/ocean-bg.jpg', anim: 'animate-ocean', tint: 'from-sky-950/40 via-slate-950/50 to-zinc-950/90' },
-  minimal: { bg: 'bg-black', accent: '#a1a1aa', image: '/themes/minimal-bg.jpg', anim: '', tint: 'from-black/40 via-black/60 to-black/95' },
-};
+const THEME_STYLES = THEME_CONFIG;
 
 const THEME_PILL_COLORS = {
   midnight: 'bg-violet-500',
@@ -803,16 +797,9 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
   const progressPct = Math.min(100, (displaySec / Math.max(1, durationSec)) * 100);
 
   return (
-    <div className={`relative min-h-screen overflow-x-hidden text-white transition-colors duration-700 ${(THEME_STYLES[theme] || THEME_STYLES.midnight).bg}`}>
-      {/* Theme Background Image */}
-      <div className="pointer-events-none fixed inset-0 z-0 overflow-hidden transition-opacity duration-1000" key={theme}>
-        <img
-          src={(THEME_STYLES[theme] || THEME_STYLES.midnight).image}
-          alt=""
-          className={`h-full w-full object-cover opacity-45 transition-all duration-1000 ${(THEME_STYLES[theme] || THEME_STYLES.midnight).anim}`}
-        />
-        <div className={`absolute inset-0 bg-gradient-to-b ${(THEME_STYLES[theme] || THEME_STYLES.midnight).tint}`} />
-      </div>
+    <div className={`relative min-h-screen overflow-x-hidden text-white transition-colors duration-700 ${(THEME_STYLES[theme] || THEME_STYLES.midnight).bgBase}`}>
+      {/* Theme Living Ambient Stage */}
+      <ThemeBackground theme={theme} isPlaying={isPlaying} />
       {/* Spotify Connect Modal */}
       <SpotifyConnectModal
         open={showSpotifyModal}
@@ -1039,27 +1026,50 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
           </div>
 
           {/* Theme pills — inline before Copy Invite Link on desktop, clean wrapped row on mobile */}
-          <div className="order-3 flex w-full flex-wrap items-center gap-1 pt-0.5 lg:order-none lg:w-auto lg:pt-0">
-            <Palette className="h-3.5 w-3.5 shrink-0 text-zinc-500" />
-            {Object.keys(THEME_STYLES).map((t) => (
-              <button
-                key={t}
-                onClick={() => {
-                  if (isDemo) {
-                    setDemoTheme(t);
-                    return;
-                  }
-                  sendCommand('room:settings', { theme: t });
-                }}
-                className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold capitalize transition sm:px-2.5 cursor-pointer ${
-                  theme === t
-                    ? 'bg-white text-zinc-950 shadow-sm'
-                    : 'bg-white/5 text-zinc-400 hover:bg-white/10 hover:text-white'
-                }`}
-              >
-                {t}
-              </button>
-            ))}
+          <div className="order-3 flex w-full flex-wrap items-center gap-1.5 pt-1 lg:order-none lg:w-auto lg:pt-0">
+            <Palette className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
+            <div className="flex flex-wrap items-center gap-1 rounded-full border border-white/[0.08] bg-black/40 p-0.5 backdrop-blur-md shadow-inner shadow-black/40">
+              {Object.keys(THEME_STYLES).map((t) => {
+                const conf = THEME_STYLES[t] || THEME_STYLES.midnight;
+                const isCurrent = theme === t;
+                return (
+                  <button
+                    key={t}
+                    onClick={() => {
+                      if (isDemo) {
+                        setDemoTheme(t);
+                        return;
+                      }
+                      sendCommand('room:settings', { theme: t });
+                    }}
+                    className={`group relative flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium capitalize transition-all duration-300 cursor-pointer ${
+                      isCurrent
+                        ? 'bg-white/15 text-white shadow-sm shadow-black/40 ring-1 ring-white/25 backdrop-blur-md'
+                        : 'text-zinc-400 hover:bg-white/[0.06] hover:text-zinc-200'
+                    }`}
+                    style={
+                      isCurrent
+                        ? {
+                            boxShadow: `0 0 16px ${conf.accent}33, inset 0 1px 0 rgba(255,255,255,0.2)`,
+                          }
+                        : undefined
+                    }
+                    title={`Switch theme to ${conf.name || t}`}
+                  >
+                    <span
+                      className={`h-2 w-2 rounded-full transition-transform duration-300 ${
+                        isCurrent ? 'scale-110 shadow-sm' : 'opacity-70 group-hover:opacity-100'
+                      }`}
+                      style={{
+                        backgroundColor: conf.accent,
+                        boxShadow: isCurrent ? `0 0 8px ${conf.accent}` : undefined,
+                      }}
+                    />
+                    <span>{conf.name || t}</span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
           <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
@@ -1495,7 +1505,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                         <AudioVisualizerCanvas
                           isPlaying={isPlaying}
                           accentColor={currentTrack.accentColor || (THEME_STYLES[theme] || THEME_STYLES.midnight).accent}
-                          secondaryColor={currentTrack.secondaryColor || '#f43f5e'}
+                          secondaryColor={currentTrack.secondaryColor || (THEME_STYLES[theme] || THEME_STYLES.midnight).secondary || '#f43f5e'}
                           coverImage={currentTrack.coverImage}
                           className="h-full w-full"
                         />
@@ -1562,7 +1572,7 @@ export default function RoomView({ isDemo = false, onLeave, demoTrack = null, de
                       canControl ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'
                     }`}
                     style={{
-                      background: `linear-gradient(to right, #fff ${progressPct}%, #3f3f46 ${progressPct}%)`,
+                      background: `linear-gradient(to right, ${(THEME_STYLES[theme] || THEME_STYLES.midnight).accent} ${progressPct}%, rgba(255,255,255,0.15) ${progressPct}%)`,
                     }}
                   />
                   <div className="mt-2 flex justify-between font-mono text-xs font-medium text-zinc-500">
